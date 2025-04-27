@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -12,8 +14,8 @@ class IHDPLoader(Dataset):
     def __init__(self, is_train=True):
         super(IHDPLoader, self).__init__()
         self.is_train = is_train
-        self.path_train = 'ihdp_npci_1-100.train.npz'
-        self.path_test = 'ihdp_npci_1-100.test.npz'
+        self.path_train = 'ihdp_npci_1-1000.train.npz'
+        self.path_test = 'ihdp_npci_1-1000.test.npz'
         self.loaded = False
         self.load()
 
@@ -64,3 +66,41 @@ class IHDPLoader(Dataset):
         w_i = self.w[idx]  # [n_real]
 
         return x_i, t_i, yf_i, ycf_i, mu0_i, mu1_i, u_i, w_i
+
+
+from torch.utils.data import Sampler
+from collections import defaultdict
+import numpy as np
+
+
+class BalancedBatchSampler(Sampler):
+    """
+    Ritorna indici tali che in ogni batch ci siano sia trattati che controlli.
+    """
+
+    def __init__(self, treatments, batch_size):
+        self.batch_size = batch_size
+        self.treated_idx = np.where(treatments == 1)[0]
+        self.control_idx = np.where(treatments == 0)[0]
+        self.num_batches = math.ceil(len(treatments) / batch_size)
+
+    def __iter__(self):
+        np.random.shuffle(self.treated_idx)
+        np.random.shuffle(self.control_idx)
+        t_ptr = c_ptr = 0
+        for _ in range(self.num_batches):
+            half = self.batch_size // 2
+            t_batch = self.treated_idx[t_ptr:t_ptr + half]
+            c_batch = self.control_idx[c_ptr:c_ptr + half]
+            if len(t_batch) < half:
+                t_batch = np.random.choice(self.treated_idx, half, replace=True)
+            if len(c_batch) < half:
+                c_batch = np.random.choice(self.control_idx, half, replace=True)
+            batch_indices = np.concatenate([t_batch, c_batch])
+            np.random.shuffle(batch_indices)
+            yield batch_indices.tolist()
+            t_ptr += half
+            c_ptr += half
+
+    def __len__(self):
+        return self.num_batches
