@@ -1,0 +1,17 @@
+name: causalforge
+channels:
+  - defaults
+  - anaconda
+  - pytorch 
+dependencies:
+  - pip 
+  - setuptools
+  - cython
+  - tensorflow-gpu
+  - keras 
+  - pytorch
+  - pytorch-cuda
+  - matplotlib
+  - numpy
+  - scikit-learn
+  - pandas 

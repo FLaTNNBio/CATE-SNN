@@ -175,3 +175,4 @@ cython_debug/
 *.xml
 .DS_Store
 .idea/CATE-SNN.iml
+/CATE_SNN/src/data
