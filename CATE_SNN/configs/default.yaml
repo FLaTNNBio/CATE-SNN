@@ -1,0 +1,18 @@
+seed: 42
+device: cuda      # oppure cpu
+
+# training
+n_reps: 10
+epochs: 300
+batch: 256
+lr: 1e-4
+
+# siamese
+lambda_ctr: 1.0
+margin: 1.0
+clip_norm: 5.0
+use_amp: false     # true per mixed precision
+
+# dataset
+percentile: 20
+num_workers: 0

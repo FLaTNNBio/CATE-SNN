@@ -1,0 +1,2 @@
+L'obiettivo della loss contrastiva nel tuo script originale (usando mu0, mu1) è di insegnare al modello che "la differenza fatta dal trattamento è simile per queste due unità".
+Se usi solo Y, il segnale diventa "l'esito finale osservato è simile per queste due unità", il che ignora completamente la componente causale e se l'esito sia dovuto al trattamento o alle caratteristiche di base.
