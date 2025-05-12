@@ -1,0 +1,15 @@
+seed: 42
+device: cuda
+n_reps: 10
+epochs: 350
+batch: 32
+lr: 0.0001
+lambda_ctr: 1.0
+margin: 1.0
+clip_norm: 5.0
+use_amp: false
+percentile: 20
+num_workers: 0
+use_proxy_ite: true
+warmup_epochs_base: 0
+update_ite_freq: 3

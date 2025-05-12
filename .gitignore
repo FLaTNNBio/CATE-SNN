@@ -176,6 +176,4 @@ cython_debug/
 .DS_Store
 .idea/CATE-SNN.iml
 /CATE_SNN/src/data
-/CATE_SNN/src/outputs
-CATE_SNN/src/train_loss.csv
-CATE_SNN/src/metrics.csv
+
