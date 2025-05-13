@@ -206,7 +206,7 @@ class DynamicContrastiveCausalDS(Dataset):
         self.update_threshold()
 
     def __len__(self):
-        return 32  # batch virtuali per epoca
+        return 10  # batch virtuali per epoca
 
     def __getitem__(self, _):
         if self.current_mu0_hat.size == 0 or self.X_all.shape[0] == 0:
