@@ -113,7 +113,7 @@ hydra:
     - hydra.mode=RUN
     task: []
   job:
-    name: siamese
+    name: train
     chdir: null
     override_dirname: ''
     id: ???
@@ -140,7 +140,7 @@ hydra:
     - path: ''
       schema: structured
       provider: schema
-    output_dir: C:\Users\aless\Desktop\CATE-SNN\CATE_SNN\src\outputs\2025-05-13\06-57-03
+    output_dir: C:\Users\aless\Desktop\CATE-SNN\CATE_SNN\src\outputs\2025-05-13\14-48-01
     choices:
       hydra/env: default
       hydra/callbacks: null

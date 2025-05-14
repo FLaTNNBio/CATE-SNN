@@ -4,7 +4,7 @@ device: cuda      # oppure cpu
 # training
 n_reps: 1000
 epochs: 500
-batch: 1024
+batch: 512
 lr: 1e-4
 
 # siamese
@@ -12,11 +12,38 @@ lambda_ctr: 1.0
 margin: 1.0
 clip_norm: 5.0
 use_amp: false     # true per mixed precision
+verbose: true      # abilita i print interni del fit
+val_split: 0.2     # frazione del training usata per validation
 
 # dataset
 percentile: 20
 num_workers: 0
 
-use_proxy_ite: true          # Valore booleano: true per usare ITE stimati, false altrimenti
-warmup_epochs_base: 50        # Intero: Numero di epoche di warmup per BCAUSS (0 per disabilitare)
+use_proxy_ite: true
+warmup_epochs_base: 20
 update_ite_freq: 3
+
+# in configs/default.yaml
+lambda_reg: 0.1     # peso della regolarizzazione L₂
+
+
+# --- Parametri Specifici per il Modello Base BCAUSS ---
+bcauss_params:
+  # Architettura e componenti della loss di BCAUSS
+  neurons_per_layer: 200  # Esempio, da adattare
+  act_fn: 'relu'          # Esempio: 'relu' o 'identity'
+  reg_l2: 0.01            # Esempio: regolarizzazione L2 per BCAUSS
+  # verbose: true           # Verbosity interna di BCAUSS.fit (se usata indipendentemente)
+  # val_split: 0.22         # Split di validazione interno a BCAUSS (se usato indipendentemente)
+  ratio: 1.0              # Per il termine di targeted regularization in BCAUSS
+  use_bce: false            # Se usare BCE per la predizione del trattamento in BCAUSS
+  norm_bal_term: true     # Se normalizzare il termine di bilanciamento in BCAUSS
+  use_targ_term: false    # Se usare il targeted regularization in BCAUSS
+  b_ratio: 1.0            # Peso per il termine di bilanciamento in BCAUSS
+  scale_preds: true       # Se BCAUSS deve scalare l'outcome Y
+  # Parametri dell'ottimizzatore interno di BCAUSS (usati solo se BCAUSS.fit viene chiamato con il suo optim)
+  # Nel setup attuale, l'ottimizzazione è gestita da SiameseBCAUSS, ma è bene averli per coerenza.
+  optim: 'adam'
+  learning_rate: 1e-5     # Esempio: LR per l'ottimizzatore interno di BCAUSS
+  momentum: 0.9
+  bs_ratio: 0.1           # Esempio: per i DataLoader interni di BCAUSS (se usati

@@ -9,8 +9,8 @@ from torch.utils.data import TensorDataset, DataLoader
 from torch.optim import SGD, Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-from CATE_SNN.src.model import Model  # tua classe base
-from CATE_SNN.src.models.utils import convert_pd_to_np  # helper CausalForge
+from src.model import Model  # tua classe base
+from src.models.utils import convert_pd_to_np  # helper CausalForge
 
 
 class EpsilonLayer(nn.Module):
@@ -146,83 +146,150 @@ class BCAUSS(Model, nn.Module):
         return reg_loss
 
     # -----------------------------------------------------------------
-    def fit(self, X, treatment, y):
+    def fit(self, X, treatment, y, epochs=None):  # <-- MODIFICA QUI: aggiungi epochs=None
         X, treatment, y = convert_pd_to_np(X, treatment, y)
         N = X.shape[0]
-        p = self.params
+        p = self.params  # Parametri interni di BCAUSS
 
-        y = y.reshape(-1, 1)
+        # Determina il numero di epoche per questo specifico run di fit
+        # Se 'epochs' viene passato come argomento, usa quello, altrimenti usa p['epochs'] di BCAUSS
+        num_epochs_to_run = epochs if epochs is not None else p['epochs']
+
+        # ----- Inizio della logica di scaling di y (assicurati sia consistente) -----
+        # Se y deve essere scalato, e lo scaler non è ancora stato fittato (es. prima chiamata a fit)
+        # O se vuoi ri-fittare lo scaler ogni volta (meno comune per y_scaler se fit è chiamato più volte
+        # con dati diversi, ma per il warmup è ok fittarlo qui).
+        # Y viene passato come Y_flat, quindi è già (N,1)
+        y_original_for_scaler = y  # Salva una copia se necessario per fittare lo scaler
         if p['scale_preds']:
-            self.y_scaler = StandardScaler().fit(y)
-            y = self.y_scaler.transform(y)
+            if self.y_scaler is None:  # Fitta solo se non esiste già
+                self.y_scaler = StandardScaler()
+                self.y_scaler.fit(y_original_for_scaler)  # y_original_for_scaler deve essere (N,1)
+
+            y = self.y_scaler.transform(y_original_for_scaler)  # y ora è scalato
+        # ----- Fine della logica di scaling di y -----
+
+        # ----- Inizio logica scaling di X (se implementata come suggerito precedentemente) -----
+        # Esempio:
+        # if p.get('scale_inputs', False): # Assumendo un parametro 'scale_inputs'
+        #     if self.x_scaler is None:
+        #         self.x_scaler = StandardScaler()
+        #         # Fitta self.x_scaler su X_train (devi definire X_train qui o passarlo)
+        #         # Potrebbe essere necessario splittare X qui per fittare solo sul training set di questo fit
+        #         # temp_idx_split = np.random.permutation(N)
+        #         # temp_tr_idx = temp_idx_split[:int(N * (1-p['val_split']))]
+        #         # self.x_scaler.fit(X[temp_tr_idx])
+        #     X = self.x_scaler.transform(X)
+        # ----- Fine logica scaling di X -----
 
         X_t = torch.tensor(X, dtype=torch.float32)
+        # Assicurati che treatment sia (N,1) se necessario per t_head
         t_t = torch.tensor(treatment.reshape(-1, 1), dtype=torch.float32)
-        y_t = torch.tensor(y, dtype=torch.float32)
+        y_t = torch.tensor(y.reshape(-1, 1), dtype=torch.float32)  # y è già (N,1) o lo diventa qui
 
-        # split
+        # split (la logica di split è già presente nel tuo codice BCAUSS)
         idx = np.random.permutation(N)
-        split = int(N * (1 - p['val_split']))
-        tr, va = idx[:split], idx[split:]
-        bs = int(N * p['bs_ratio'])
+        split_point = int(N * (1 - p['val_split']))
+        tr, va = idx[:split_point], idx[split_point:]
 
-        train_loader = DataLoader(TensorDataset(X_t[tr], t_t[tr], y_t[tr]),
-                                  batch_size=bs, shuffle=True)
-        val_loader = DataLoader(TensorDataset(X_t[va], t_t[va], y_t[va]),
-                                batch_size=bs, shuffle=False)
+        # Batch size: usa p['bs_ratio'] come nel tuo codice originale BCAUSS
+        # Se vuoi usare un batch_size fisso invece di bs_ratio, dovresti aggiungere un parametro
+        # 'batch_size' a p e usarlo qui. Per ora, mantengo la tua logica originale.
+        effective_train_size = len(tr)
+        bs = int(effective_train_size * p['bs_ratio'])
+        if bs == 0 and effective_train_size > 0: bs = effective_train_size  # Evita batch size 0 se ci sono dati
 
-        # optimizer (no weight_decay, già incluso in loss)
+        # DataLoaders (la logica è già presente nel tuo codice BCAUSS)
+        # Assicurati che il batch_size (bs) sia gestito correttamente se N è piccolo.
+        if effective_train_size > 0:
+            train_loader = DataLoader(TensorDataset(X_t[tr], t_t[tr], y_t[tr]),
+                                      batch_size=bs if bs > 0 else 1, shuffle=True)  # Aggiunto bs > 0 else 1
+        else:
+            train_loader = []  # o gestisci il caso di training set vuoto
+
+        if len(va) > 0:
+            val_bs = int(len(va) * p['bs_ratio'])  # Potresti voler un val_batch_size diverso
+            val_loader = DataLoader(TensorDataset(X_t[va], t_t[va], y_t[va]),
+                                    batch_size=val_bs if val_bs > 0 else 1, shuffle=False)
+        else:
+            val_loader = []
+
+        # optimizer (la logica è già presente)
         optim_cls = Adam if p['optim'] == 'adam' else SGD
         optim_kwargs = {'lr': p['learning_rate'],
                         'momentum': p['momentum']} if p['optim'] == 'sgd' else \
             {'lr': p['learning_rate']}
         optimizer = optim_cls(self.parameters(), **optim_kwargs)
         scheduler = ReduceLROnPlateau(optimizer, mode='min',
-                                      factor=0.5, patience=5,
-                                      verbose=p['verbose'])
+                                      factor=0.5, patience=5,  # Considera di rendere 'patience' un param
+                                      )
 
-        best_val, patience = float('inf'), 0
+        best_val, patience_counter = float('inf'), 0  # rinominato patience a patience_counter
+        best_state = None  # Inizializza best_state
         self.to(self.device)
-        X_t, t_t, y_t = None, None, None  # libera RAM host
+        # X_t, t_t, y_t = None, None, None # Libera RAM host - fallo dopo aver creato i dataloader se N è molto grande
 
-        for epoch in range(1, p['epochs'] + 1):
+        if not train_loader:  # Se non ci sono dati di training
+            if p['verbose']:
+                print("BCAUSS Warmup: No training data provided or training set is empty.")
+            return
+
+        for epoch in range(1, num_epochs_to_run + 1):  # <-- MODIFICA QUI: usa num_epochs_to_run
             # ---- train ----
             self.train()
             tl = 0.0
+            train_batches = 0
             for xb, tb, yb in train_loader:
                 xb, tb, yb = xb.to(self.device), tb.to(self.device), yb.to(self.device)
                 optimizer.zero_grad()
                 loss = self.compute_loss(xb, tb, yb)
-                loss.backward()
-                optimizer.step()
-                tl += loss.item()
-            tl /= len(train_loader)
+                if not torch.isnan(loss):  # Aggiunto controllo NaN prima di backward
+                    loss.backward()
+                    optimizer.step()
+                    tl += loss.item()
+                else:
+                    print(f"Warning: NaN loss detected in BCAUSS epoch {epoch}. Skipping batch.")  # Avviso
+                train_batches += 1
+            tl /= train_batches if train_batches > 0 else 1
 
             # ---- val ----
-            self.eval()
             vl = 0.0
-            with torch.no_grad():
-                for xb, tb, yb in val_loader:
-                    xb, tb, yb = xb.to(self.device), tb.to(self.device), yb.to(self.device)
-                    vl += self.compute_loss(xb, tb, yb).item()
-            vl /= len(val_loader)
+            if val_loader:  # Solo se ci sono dati di validazione
+                self.eval()
+                val_batches = 0
+                with torch.no_grad():
+                    for xb, tb, yb in val_loader:
+                        xb, tb, yb = xb.to(self.device), tb.to(self.device), yb.to(self.device)
+                        loss_val = self.compute_loss(xb, tb, yb)
+                        if not torch.isnan(loss_val):
+                            vl += loss_val.item()
+                        else:
+                            print(f"Warning: NaN validation loss detected in BCAUSS epoch {epoch}.")
+                        val_batches += 1
+                vl /= val_batches if val_batches > 0 else 1
+                scheduler.step(vl)  # Step dello scheduler solo se c'è una val loss
+            else:  # Se non c'è val_loader, puoi usare la training loss per lo scheduler o non usarlo
+                scheduler.step(tl)  # Esempio: usa training loss se non c'è validation
+                vl = tl  # Imposta vl=tl per la stampa e l'early stopping se non c'è validazione
 
-            scheduler.step(vl)
             if p['verbose']:
-                print(f"Epoch {epoch}/{p['epochs']}  train={tl:.2f}  val={vl:.2f}")
+                print(
+                    f"BCAUSS Warmup Epoch {epoch}/{num_epochs_to_run}  train={tl:.4f}  val={vl:.4f}  lr={optimizer.param_groups[0]['lr']:.2e}")
 
-            if vl < best_val - 1e-6:
+            if vl < best_val - 1e-6:  # Early stopping basato su vl
                 best_val = vl
                 best_state = self.state_dict()
-                patience = 0
+                patience_counter = 0
             else:
-                patience += 1
-                if patience >= 40:
+                patience_counter += 1
+                # Rendi la patience dell'early stopping un parametro, es p['early_stopping_patience']
+                if patience_counter >= p.get('early_stopping_patience', 40):
                     if p['verbose']:
-                        print("Early stopping.")
+                        print(f"BCAUSS Warmup: Early stopping at epoch {epoch}.")
                     break
 
-        self.load_state_dict(best_state)
+        if best_state:  # Carica il best_state solo se è stato salvato qualcosa
+            self.load_state_dict(best_state)
 
     # -----------------------------------------------------------------
     def mu_and_embedding(self, x):
