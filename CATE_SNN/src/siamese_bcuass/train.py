@@ -11,11 +11,11 @@ from codecarbon import EmissionsTracker
 from src.data_loader import DataLoader as CFLoader
 from src.models.bcauss import BCAUSS
 from src.metrics import eps_ATE_diff, PEHE_with_ite
-from src.contrastive import DynamicContrastiveCausalDS, first_item
-from src.siamese import SiameseBCAUSS
+from src.contrastive import DynamicContrastiveCausalDS
+from src.siamese_bcuass.siamese import SiameseBCAUSS
 
 
-@hydra.main(config_path="../configs", config_name="default", version_base="1.3")
+@hydra.main(config_path="../../configs", config_name="default", version_base="1.3")
 def run(cfg: DictConfig):
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     print("Config:\n" + OmegaConf.to_yaml(cfg))

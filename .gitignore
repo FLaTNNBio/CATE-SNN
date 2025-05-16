@@ -177,3 +177,6 @@ cython_debug/
 .idea/CATE-SNN.iml
 /CATE_SNN/src/data
 
+/CATE_SNN/src/outputs
+/CATE_SNN/src/siamese_bcuass/outputs
+/CATE_SNN/src/siamese_dragonet/outputs

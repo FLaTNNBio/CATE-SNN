@@ -13,13 +13,9 @@ from torch.utils.data import DataLoader, Dataset  # Aggiunto Dataset per chiarez
 
 from sklearn.preprocessing import StandardScaler
 
-
 # Assumendo che convert_pd_to_np e first_item siano definiti correttamente
-from src.models.utils import convert_pd_to_np # Se è in un file utils.py dentro models
-from src.contrastive import first_item # Se è in contrastive.py
-
-
-
+from src.models.utils import convert_pd_to_np  # Se è in un file utils.py dentro models
+from src.contrastive import first_item  # Se è in contrastive.py
 
 
 class SiameseBCAUSS(nn.Module):
@@ -76,7 +72,7 @@ class SiameseBCAUSS(nn.Module):
         loss = labels * loss_sim + (1 - labels) * loss_dis
         return loss.mean()  # Media della loss sulle coppie nel batch
 
-    def fit(self, X: np.ndarray, T: np.ndarray, Y: np.ndarray):
+    def fit(self, X: np.ndarray, T: np.ndarray, Y: np.ndarray, best_model_path=None):
         # prepare numpy data
         # Assicurati che X, T, Y siano NumPy array qui
         if not all(isinstance(arr, np.ndarray) for arr in [X, T, Y]):
@@ -107,7 +103,8 @@ class SiameseBCAUSS(nn.Module):
             return
         if len(va_idx) == 0:
             logging.warning(
-                "Validation set is empty after split. Proceeding without validation for ITE updates if needed by dataset.")
+                "Validation set is empty after split. Proceeding without validation for ITE updates if needed by "
+                "dataset.")
             # Considera come gestire l'assenza di un validation set per val_ds
 
         # Initial ITE (Individual Treatment Effect) estimates from the base model
@@ -129,9 +126,6 @@ class SiameseBCAUSS(nn.Module):
             mu0_va = mu_va[:, 0].cpu().numpy()
             mu1_va = mu_va[:, 1].cpu().numpy()
 
-        # Create datasets
-        # Il parametro 'bs' qui è passato al costruttore del dataset ds_class.
-        # Se ds_class non lo usa, potrebbe essere rimosso o gestito diversamente.
         train_ds = self.ds_class(X_np[tr_idx], T_np[tr_idx], Y_np[tr_idx], mu0_tr, mu1_tr, bs=p['batch_size'])
 
         val_loader = None
@@ -141,7 +135,8 @@ class SiameseBCAUSS(nn.Module):
         else:
             # Se non c'è validation set, val_ds non viene creato, val_loader rimane None
             logging.info(
-                "Validation set is empty or ITEs for validation could not be computed. Siamese training will proceed without validation loop.")
+                "Validation set is empty or ITEs for validation could not be computed. Siamese training will proceed "
+                "without validation loop.")
 
         train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, collate_fn=first_item, num_workers=0)
 
@@ -152,12 +147,8 @@ class SiameseBCAUSS(nn.Module):
             optim_kwargs['momentum'] = p['momentum']
         optimizer = optim_cls(self.parameters(), **optim_kwargs)
 
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=max(1, p['patience'] // 3))
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
-        # GradScaler per Automatic Mixed Precision (AMP)
-        # CORREZIONE: device_type non è un argomento per GradScaler.__init__
-        # L'abilitazione dipende da use_amp e se il device è cuda.
-        # autocast gestirà il device_type.
         use_cuda_for_amp = p['use_amp'] and self.device.type == 'cuda'
         scaler = GradScaler(enabled=use_cuda_for_amp)
 
@@ -205,6 +196,12 @@ class SiameseBCAUSS(nn.Module):
                     base_loss = self.base.compute_loss(X_combined, T_combined_true, Y_combined_for_base_loss)
                     ctr_loss = self.contrastive_loss(h1, h2, labels_ctr)
                     loss = base_loss + self.lambda_ctr * ctr_loss
+
+                    if p['verbose']:
+                        logging.info(
+                            f"[Epoch {epoch}] Base Loss: {base_loss.item():.6f} | Contrastive Loss: {ctr_loss.item():.6f} | "
+                            f"Total Loss: {loss.item():.6f}"
+                        )
 
                 if torch.isnan(loss) or torch.isinf(loss):
                     logging.warning(
@@ -328,6 +325,10 @@ class SiameseBCAUSS(nn.Module):
                 patience_counter = 0
                 if p['verbose']:
                     logging.debug(f"New best loss: {best_val_loss:.4f}. Saving model state.")
+                if best_model_path is not None:
+                    torch.save(best_state_dict, best_model_path)
+                    if p['verbose']:
+                        logging.info(f"Saved best model weights to: {best_model_path}")
             else:
                 patience_counter += 1
                 if p['verbose']:

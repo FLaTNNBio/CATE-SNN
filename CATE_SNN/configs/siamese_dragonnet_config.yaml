@@ -1,0 +1,29 @@
+# siamese_dragonnet_config.yaml
+
+defaults:
+  - override hydra/job_logging: default
+  - override hydra/hydra_logging: default
+
+# Seeder e device
+seed: 42
+device: cuda
+
+# Dataset IHDP
+dataset: IHDP
+n_reps: 10
+
+# Parametri SiameseDragonNet
+margin: 0.5          # soglia iniziale per contrastive loss
+lambda_ctr: 1.0      # peso della loss contrastiva
+
+# Parametri di training
+val_split: 0.2       # frazione per validation split
+batch: 128           # batch_size (coppie generate per batch)
+optim: adam          # optimizer: adam | sgd
+lr: 1e-4             # learning rate
+momentum: 0.9        # solo se optim=sgd
+epochs: 50
+patience: 10
+clip_norm: 1.0
+use_amp: false        # mixed precision
+warmup_epochs_base: 5

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import logging
 import numpy as np
 import torch
@@ -137,6 +136,10 @@ class DynamicContrastiveCausalDS(Dataset):
         self.perc = perc
         self.sample_for_thr_calc = sample_for_thr_calc
 
+        # Data leakage protection assert
+        assert X_all.shape[0] == mu0_hat.shape[0] == mu1_hat.shape[0], \
+            "mu0_hat and mu1_hat must match X_all in length. Ensure no test data is included."
+
         if mu0_hat is not None and mu1_hat is not None and mu0_hat.size and mu1_hat.size:
             self.current_mu0_hat = mu0_hat
             self.current_mu1_hat = mu1_hat
@@ -156,6 +159,8 @@ class DynamicContrastiveCausalDS(Dataset):
         logging.info(f"Updated dynamic threshold: {self.thr:.4f}")
 
     def update_ite_estimates(self, mu0_hat, mu1_hat):
+        assert mu0_hat.shape[0] == self.X_all.shape[0], "ITE update: mu0_hat length mismatch"
+        assert mu1_hat.shape[0] == self.X_all.shape[0], "ITE update: mu1_hat length mismatch"
         if mu0_hat is not None and mu1_hat is not None and mu0_hat.size and mu1_hat.size:
             self.current_mu0_hat = mu0_hat
             self.current_mu1_hat = mu1_hat

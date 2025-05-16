@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# train_siamese_dragonnet_hydra.py
+# Script Hydra-based per training del modello SiameseDragonNet sulla replicazione continua di IHDP
+
 import os
 import random
 import csv
@@ -12,10 +15,10 @@ import torch
 from codecarbon import EmissionsTracker
 
 from src.data_loader import DataLoader as CFLoader
-from src.models.bcauss import BCAUSS
 from src.metrics import eps_ATE_diff, PEHE_with_ite
+
 from src.contrastive import DynamicContrastiveCausalDS
-from src.siamese import SiameseBCAUSS
+from src.siamese_dragonet.siamese import SiameseDragonNet
 
 
 def save_metrics(csv_path, step_idx, eps_ate, pehe, co2=""):
@@ -23,10 +26,10 @@ def save_metrics(csv_path, step_idx, eps_ate, pehe, co2=""):
         csv.writer(fm).writerow([step_idx, f"{eps_ate:.6f}", f"{pehe:.6f}", co2])
 
 
-@hydra.main(config_path="../configs", config_name="default", version_base="1.3")
+@hydra.main(config_path="../../configs", config_name="siamese_dragonnet_config", version_base="1.3")
 def run(cfg: DictConfig):
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-    print("Config:\n" + OmegaConf.to_yaml(cfg))
+    print("Config:" + OmegaConf.to_yaml(cfg))
 
     # Seeds and device
     os.environ['PYTHONHASHSEED'] = str(cfg.seed)
@@ -39,60 +42,55 @@ def run(cfg: DictConfig):
     device = cfg.device if torch.cuda.is_available() else "cpu"
     logging.info(f"Using device: {device}")
 
-    # Output setup
+    # Outputs
     out_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
     metrics_csv = out_dir / "metrics.csv"
-    metrics_csv.write_text("step,eps_ate,pehe,co2_kg\n")
+    metrics_csv.write_text("step,eps_ate,pehe,co2_kg")
+    models_dir = out_dir / "best_models"
+    models_dir.mkdir(exist_ok=True)
 
     # Track emissions
     tracker = EmissionsTracker(output_dir=str(out_dir), log_level="error", save_to_file=True)
     tracker.start()
 
-    # Load all replicas data
+    # Load IHDP data
     loader = CFLoader.get_loader('IHDP')
     X_tr_all, T_tr_all, YF_tr_all, _, m0_tr_all, m1_tr_all, X_te_all, _, _, _, m0_te_all, m1_te_all = loader.load()
 
-    # Initialize base model once with warmup
-    base = BCAUSS(input_dim=X_tr_all.shape[1])
-    if cfg.warmup_epochs_base > 0:
-        X0 = X_tr_all[:, :, 0].astype(np.float32)
-        T0 = T_tr_all[:, 0, None].astype(np.float32)
-        Y0 = YF_tr_all[:, 0, None].astype(np.float32)
-        base.fit(X0, T0, Y0, epochs=cfg.warmup_epochs_base)
-    base.to(device)
+    # Instantiate SiameseDragonNet
+    model = SiameseDragonNet(
+        input_dim=X_tr_all.shape[1],
+        ds_class=DynamicContrastiveCausalDS,
+        margin=cfg.margin,
+        lambda_ctr=cfg.lambda_ctr,
+        device=device,
+        # pass-through params
+        val_split=cfg.val_split,
+        batch_size=cfg.batch,
+        optim=cfg.optim,
+        lr=cfg.lr,
+        momentum=cfg.momentum,
+        epochs=cfg.epochs,
+        patience=cfg.patience,
+        clip_norm=cfg.clip_norm,
+        use_amp=cfg.use_amp,
+        warmup_epochs_base=cfg.warmup_epochs_base
+    ).to(device)
 
-    # Save base initial state for regularization
-    orig_base_state = {name: param.detach().clone().to(device)
-                       for name, param in base.state_dict().items()}
-
-    # Initialize Siamese model once
-    siamese_params = {
-        'ds_class': DynamicContrastiveCausalDS,
-        'margin': cfg.margin,
-        'lambda_ctr': cfg.lambda_ctr,
-        'batch_size': cfg.batch,
-        'lr': cfg.lr,
-        'epochs': cfg.epochs,
-        'clip_norm': cfg.clip_norm,
-        'use_amp': cfg.use_amp,
-        'val_split': cfg.val_split,
-        'update_ite_freq': cfg.update_ite_freq,
-        'warmup_epochs_base': 0,
-        'lambda_reg': cfg.get('lambda_reg', 0.0),
-    }
-    model = SiameseBCAUSS(base_model=base, **siamese_params).to(device)
-
-    # Sequential training and evaluation over replicas
+    # Continuous training over replicas
     for idx in range(cfg.n_reps):
-        logging.info(f"--- Step {idx + 1}/{cfg.n_reps}: training on replica {idx} ---")
+        step = idx + 1
+        logging.info(f"--- Step {step}/{cfg.n_reps}: replica {idx} ---")
+        # Prepare replica data
         Xtr = X_tr_all[:, :, idx].astype(np.float32)
         Ttr = T_tr_all[:, idx, None].astype(np.float32)
         Ytr = YF_tr_all[:, idx, None].astype(np.float32)
 
-        # Train on this replica (continual learning)
-        model.fit(Xtr, Ttr, Ytr)
+        # Train
+        best_model_path = models_dir / f"best_siamese_dn_step_{step}.pth"
+        model.fit(Xtr, Ttr, Ytr, best_model_path=str(best_model_path))
 
-        # Evaluate on this replica
+        # Evaluate
         Xte = X_te_all[:, :, idx].astype(np.float32)
         true_ite = m1_te_all[:, idx] - m0_te_all[:, idx]
         if Xte.shape[0] > 0:
@@ -102,24 +100,22 @@ def run(cfg: DictConfig):
             pehe = PEHE_with_ite(pred_ite, true_ite, sqrt=True)
         else:
             eps, pehe = np.nan, np.nan
-        logging.info(f"After step {idx + 1}: eps_ATE={eps:.4f}, PEHE={pehe:.4f}")
-        save_metrics(metrics_csv, idx + 1, eps, pehe)
+        logging.info(f"After step {step}: eps_ATE={eps:.4f}, PEHE={pehe:.4f}")
+        save_metrics(metrics_csv, step, eps, pehe)
 
     # Stop emissions
     total_co2 = tracker.stop() or 0.0
 
-    # Compute overall summary
+    # Summary
     eps_vals, pehe_vals = [], []
     with open(metrics_csv) as f:
         reader = csv.reader(f)
         next(reader)
         for row in reader:
-            eps_vals.append(float(row[1]))
+            eps_vals.append(float(row[1]));
             pehe_vals.append(float(row[2]))
     mean_eps = np.nanmean(eps_vals)
     mean_pehe = np.nanmean(pehe_vals)
-
-    # Append final summary row
     with open(metrics_csv, "a", newline="") as fm:
         csv.writer(fm).writerow(["AVERAGE", f"{mean_eps:.6f}", f"{mean_pehe:.6f}", f"{total_co2:.3f}"])
 
