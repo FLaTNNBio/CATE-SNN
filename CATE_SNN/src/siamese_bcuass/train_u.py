@@ -4,6 +4,7 @@ import random
 import csv
 import logging
 from pathlib import Path
+import itertools
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -18,9 +19,10 @@ from src.contrastive import DynamicContrastiveCausalDS
 from src.siamese_bcuass.siamese import SiameseBCAUSS
 
 
-def save_metrics(csv_path, step_idx, eps_ate, pehe, co2=""):
+def save_metrics(csv_path, identifier, eps_ate, pehe, co2=""):
+    """Append metrics to the specified CSV file."""
     with open(csv_path, "a", newline="") as fm:
-        csv.writer(fm).writerow([step_idx, f"{eps_ate:.6f}", f"{pehe:.6f}", co2])
+        csv.writer(fm).writerow([identifier, f"{eps_ate:.6f}", f"{pehe:.6f}", co2])
 
 
 @hydra.main(config_path="../../configs", config_name="default", version_base="1.3")
@@ -42,7 +44,8 @@ def run(cfg: DictConfig):
     # Output setup
     out_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
     metrics_csv = out_dir / "metrics.csv"
-    metrics_csv.write_text("step,eps_ate,pehe,co2_kg\n")
+    # Header: identifier can be step or config_idx:step
+    metrics_csv.write_text("id,eps_ate,pehe,co2_kg\n")
     models_dir = out_dir / "best_models"
     models_dir.mkdir(exist_ok=True)
 
@@ -63,66 +66,84 @@ def run(cfg: DictConfig):
         base.fit(X0, T0, Y0, epochs=cfg.warmup_epochs_base)
     base.to(device)
 
-    # Initialize Siamese model once
-    siamese_params = {
-        'ds_class': DynamicContrastiveCausalDS,
-        'margin': cfg.margin,
-        'lambda_ctr': cfg.lambda_ctr,
-        'batch_size': cfg.batch,
-        'lr': cfg.lr,
-        'epochs': cfg.epochs,
-        'clip_norm': cfg.clip_norm,
-        'use_amp': cfg.use_amp,
-        'val_split': cfg.val_split,
-        'update_ite_freq': cfg.update_ite_freq,
-        'warmup_epochs_base': 0,
-        'lambda_reg': cfg.get('lambda_reg', 0.0),
+    # Grid search parameters from config
+    param_grid = {
+        'margin': cfg.grid.margin,
+        'lambda_ctr': cfg.grid.lambda_ctr,
+        'lr': cfg.grid.lr,
+        'batch_size': cfg.grid.batch_size,
     }
-    model = SiameseBCAUSS(base_model=base, **siamese_params).to(device)
+    grid = list(itertools.product(
+        param_grid['margin'],
+        param_grid['lambda_ctr'],
+        param_grid['lr'],
+        param_grid['batch_size'],
+    ))
 
-    # Sequential training and evaluation over replicas
-    for idx in range(cfg.n_reps):
-        logging.info(f"--- Step {idx + 1}/{cfg.n_reps}: training on replica {idx} ---")
-        Xtr = X_tr_all[:, :, idx].astype(np.float32)
-        Ttr = T_tr_all[:, idx, None].astype(np.float32)
-        Ytr = YF_tr_all[:, idx, None].astype(np.float32)
+    # CSV for grid search summary
+    grid_csv = out_dir / 'grid_search_results.csv'
+    grid_csv.write_text('margin,lambda_ctr,lr,batch_size,avg_eps_ATE,avg_PEHE\n')
 
-        # Train on this replica (continual learning)
-        best_model_path = models_dir / f"best_siamese_step_{idx + 1}.pt"
-        model.fit(Xtr, Ttr, Ytr, best_model_path=str(best_model_path))
+    # Perform grid search
+    for cfg_idx, (margin, lam, lr, bs) in enumerate(grid, start=1):
+        eps_vals, pehe_vals = [], []
+        logging.info(
+            f"--- Grid Search {cfg_idx}/{len(grid)}: margin={margin}, lambda_ctr={lam}, lr={lr}, batch_size={bs} ---")
 
-        # Evaluate on this replica
-        Xte = X_te_all[:, :, idx].astype(np.float32)
-        true_ite = m1_te_all[:, idx] - m0_te_all[:, idx]
-        if Xte.shape[0] > 0:
-            with torch.no_grad():
-                pred_ite = model.predict_ite(Xte)
-            eps = eps_ATE_diff(pred_ite.mean(), true_ite.mean())
-            pehe = PEHE_with_ite(pred_ite, true_ite, sqrt=True)
-        else:
-            eps, pehe = np.nan, np.nan
-        logging.info(f"After step {idx + 1}: eps_ATE={eps:.4f}, PEHE={pehe:.4f}")
-        save_metrics(metrics_csv, idx + 1, eps, pehe)
+        # Re-initialize siamese model for each config
+        siamese_params = {
+            'ds_class': DynamicContrastiveCausalDS,
+            'margin': margin,
+            'lambda_ctr': lam,
+            'batch_size': bs,
+            'lr': lr,
+            'epochs': cfg.epochs,
+            'clip_norm': cfg.clip_norm,
+            'use_amp': cfg.use_amp,
+            'val_split': cfg.val_split,
+            'update_ite_freq': cfg.update_ite_freq,
+            'warmup_epochs_base': 0,
+            'lambda_reg': cfg.get('lambda_reg', 0.0),
+        }
+        model = SiameseBCAUSS(base_model=base, **siamese_params).to(device)
 
-    # Stop emissions
-    total_co2 = tracker.stop() or 0.0
+        # Train and evaluate over replicas
+        for rep in range(cfg.n_reps):
+            # Training on replica rep
+            Xtr = X_tr_all[:, :, rep].astype(np.float32)
+            Ttr = T_tr_all[:, rep, None].astype(np.float32)
+            Ytr = YF_tr_all[:, rep, None].astype(np.float32)
+            model.fit(Xtr, Ttr, Ytr)
 
-    # Compute overall summary
-    eps_vals, pehe_vals = [], []
-    with open(metrics_csv) as f:
-        reader = csv.reader(f)
-        next(reader)
-        for row in reader:
-            eps_vals.append(float(row[1]))
-            pehe_vals.append(float(row[2]))
-    mean_eps = np.nanmean(eps_vals)
-    mean_pehe = np.nanmean(pehe_vals)
+            # Evaluation
+            Xte = X_te_all[:, :, rep].astype(np.float32)
+            true_ite = m1_te_all[:, rep] - m0_te_all[:, rep]
+            if Xte.shape[0] > 0:
+                with torch.no_grad():
+                    pred_ite = model.predict_ite(Xte)
+                eps = eps_ATE_diff(pred_ite.mean(), true_ite.mean())
+                pehe = PEHE_with_ite(pred_ite, true_ite, sqrt=True)
+            else:
+                eps, pehe = np.nan, np.nan
 
-    # Append final summary row
-    with open(metrics_csv, "a", newline="") as fm:
-        csv.writer(fm).writerow(["AVERAGE", f"{mean_eps:.6f}", f"{mean_pehe:.6f}", f"{total_co2:.3f}"])
+            # Save per-experiment metrics
+            identifier = f"cfg{cfg_idx}_rep{rep + 1}"
+            save_metrics(metrics_csv, identifier, eps, pehe)
+            eps_vals.append(eps)
+            pehe_vals.append(pehe)
+            logging.info(f"[{identifier}] eps_ATE={eps:.4f}, PEHE={pehe:.4f}")
 
-    print(f"Total CO2: {total_co2:.3f} kg | Mean eps_ATE={mean_eps:.4f}, Mean PEHE={mean_pehe:.4f}")
+        # Average metrics per config
+        avg_eps = np.nanmean(eps_vals)
+        avg_pehe = np.nanmean(pehe_vals)
+        # Save grid summary
+        with open(grid_csv, "a", newline="") as f:
+            csv.writer(f).writerow([margin, lam, lr, bs, f"{avg_eps:.6f}", f"{avg_pehe:.6f}"])
+        logging.info(f"Config {cfg_idx} summary: avg_eps_ATE={avg_eps:.4f}, avg_PEHE={avg_pehe:.4f}")
+
+    # Finish emissions tracking
+    tracker.stop()
+    logging.info("Grid search completed. Results saved to grid_search_results.csv and metrics.csv")
 
 
 if __name__ == "__main__":

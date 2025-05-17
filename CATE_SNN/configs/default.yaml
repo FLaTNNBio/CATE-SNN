@@ -2,7 +2,7 @@ seed: 42
 device: cuda  # GPU per velocità
 
 # Training generale
-n_reps: 10
+n_reps: 1000
 epochs: 500
 batch: 32
 lr: 1e-4
@@ -46,3 +46,10 @@ bcauss_params:
   learning_rate: 1e-5     # Esempio: LR per l'ottimizzatore interno di BCAUSS
   momentum: 0.9
   bs_ratio: 0.1           # Esempio: per i DataLoader interni di BCAUSS (se usati
+
+
+grid:
+  margin: [0.75]
+  lambda_ctr: [1.0]
+  lr: [ 2e-4, 3e-4, 5e-4, 7e-4, 1e-3 ]
+  batch_size: [ 32]
