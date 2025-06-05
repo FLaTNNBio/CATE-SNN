@@ -35,7 +35,8 @@ def run(cfg: DictConfig):
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
-    if torch.cuda.is_available(): torch.cuda.manual_seed_all(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg.seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     device = cfg.device if torch.cuda.is_available() else "cpu"
@@ -59,11 +60,11 @@ def run(cfg: DictConfig):
 
     # Initialize base model once with warmup
     base = BCAUSS(input_dim=X_tr_all.shape[1])
-    if cfg.warmup_epochs_base > 0:
+    if cfg.siamese.warmup_epochs_base > 0:
         X0 = X_tr_all[:, :, 0].astype(np.float32)
         T0 = T_tr_all[:, 0, None].astype(np.float32)
         Y0 = YF_tr_all[:, 0, None].astype(np.float32)
-        base.fit(X0, T0, Y0, epochs=cfg.warmup_epochs_base)
+        base.fit(X0, T0, Y0, epochs=cfg.siamese.warmup_epochs_base)
     base.to(device)
 
     # Grid search parameters from config

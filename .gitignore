@@ -180,3 +180,4 @@ cython_debug/
 /CATE_SNN/src/outputs
 /CATE_SNN/src/siamese_bcuass/outputs
 /CATE_SNN/src/siamese_dragonet/outputs
+/CATE_SNN/src/siamese_bcuass/saved_weights
