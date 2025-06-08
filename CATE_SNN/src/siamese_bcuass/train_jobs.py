@@ -4,44 +4,38 @@
 """
 train_jobs.py
 
-Pipeline di training “solo per JOBS” basata su BCAUSS + SiameseBCAUSS,
-senza parametri da linea di comando: tutte le impostazioni sono definite
-in testa al file. Carica due file .npz distinti (train + test), gestisce
-automaticamente chiavi alternative e terze dimensioni (repliche).
-
-Come usare:
-  1. Impostate i percorsi e gli iperparametri nella sezione “CONFIGURAZIONE” qui sotto.
-     - NPZ_TRAIN_PATH: file .npz per il training
-     - NPZ_TEST_PATH:  file .npz per il test
-  2. Eseguite:
-       python train_jobs.py
+Pipeline di training “solo per JOBS” basata su BCAUSS + SiameseBCAUSS.
+Tutto è parametrizzato in testa al file, senza argomenti da linea di comando.
+Carica due file .npz distinti (train + test), gestisce automaticamente
+chiavi alternative e terze dimensioni (repliche).
 """
 
 import os
 import random
 import csv
 from pathlib import Path
+import logging
 
 import numpy as np
 import torch
 from sklearn.preprocessing import StandardScaler
 
 from src.models.bcauss import BCAUSS
-from src.siamese_bcuass.siamese import SiameseBCAUSS
 from src.contrastive import DynamicContrastiveCausalDS
+from src.siamese_bcuass.siamese import SiameseBCAUSS
 
-# =============================================================================
-# CONFIGURAZIONE: modificare questi valori a piacere prima di eseguire lo script
-# =============================================================================
+# Configura il logging di base
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Percorsi ai file .npz: uno per il train, uno per il test
-NPZ_TRAIN_PATH = "../../jobs_DW_bin.new.10.train.npz"
-NPZ_TEST_PATH  = "../../jobs_DW_bin.new.10.test.npz"
+# ============================= CONFIGURAZIONE ==============================
+# Percorsi ai file .npz (train + test). Modifica qui secondo la tua struttura.
+NPZ_TRAIN_PATH = "../data/jobs_DW_bin.new.10.train.npz"
+NPZ_TEST_PATH  = "../data/jobs_DW_bin.new.10.test.npz"
 
-# Se i file .npz contengono più repliche (terza dimensione), selezionare quale usare:
+# Se i .npz contengono più repliche (terza dimensione), seleziona quale utilizzare:
 REP_INDEX = 0  # indice della replica (0-based)
 
-# Iperparametri per il warm‐up di BCAUSS (modificare se necessario)
+# Iperparametri per il warm‐up di BCAUSS (base model)
 WARMUP_EPOCHS     = 5
 BATCH_SIZE_BASE   = 128
 LR_BASE           = 1e-3
@@ -54,255 +48,310 @@ LR_SIAMESE           = 1e-4
 WEIGHT_DECAY_SIAMESE = 1e-5
 BATCH_SIZE_SIAMESE   = 128
 EPOCHS_SIAMESE       = 50
-VAL_SPLIT            = 0.2
+VAL_SPLIT_SIAMESE    = 0.2
 CLIP_NORM            = 1.0
-USE_AMP              = False        # True per mixed‐precision, False altrimenti
+USE_AMP              = False
 UPDATE_ITE_FREQ      = 1
+SIAMESE_PATIENCE     = 20
 
 # Seed per riproducibilità
 SEED = 42
 
-# Directory in cui salvare gli output (verrà creata se non esiste)
-OUTPUT_DIR = "./outputs"
-
-# =============================================================================
-# Fine configurazione
-# =============================================================================
+# Directory di output (creata automaticamente se non esiste)
+OUTPUT_DIR = "./outputs_jobs"
+# ===========================================================================
 
 
-def load_from_npz(npz_path, rep_index):
+def set_seed(seed: int):
+    """Imposta i semi per PyTorch, NumPy, Python random."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def load_from_npz(npz_path: str, rep_index: int = 0):
     """
-    Ritorna X, T, Y e opzionale mask_RCT da un file .npz.
-    Gestisce chiavi alternative ('X','T','Y' o 'x','t','yf') e
-    terze dimensioni (repliche). Se i dati hanno dimensione 3, prende
-    slice [:, :, rep_index].
-
-    Output:
-      X: array float32 di shape (N, d)
-      T: array float32 di shape (N, 1)
-      Y: array float32 di shape (N, 1)
-      mask_RCT: array bool di shape (N,) se presente, altrimenti None
+    Carica X, T, Y e (opzionale) mask_RCT da un file .npz.
+    Gestione di chiavi alternative: {"X","T","Y"} o {"x","t","yf"}.
+    Gestisce anche eventuale terza dimensione (repliche).
     """
     data = np.load(npz_path)
     keys = set(data.files)
 
-    # Identifico le chiavi di input
     if {"X", "T", "Y"}.issubset(keys):
-        X_raw = data["X"]
-        T_raw = data["T"]
-        Y_raw = data["Y"]
+        X_raw, T_raw, Y_raw = data["X"], data["T"], data["Y"]
     elif {"x", "t", "yf"}.issubset(keys):
-        X_raw = data["x"]
-        T_raw = data["t"]
-        Y_raw = data["yf"]
+        X_raw, T_raw, Y_raw = data["x"], data["t"], data["yf"]
     else:
-        raise ValueError(
-            f"{npz_path}: serve almeno 'X','T','Y' oppure 'x','t','yf'."
-        )
+        raise ValueError(f"{npz_path}: serve almeno 'X','T','Y' oppure 'x','t','yf'.")
 
-    # Estrazione replica se necessario
-    # X_raw può essere 2D (N,d) o 3D (N,d,R)
-    if X_raw.ndim == 3:
-        N, d, R = X_raw.shape
-        if not (0 <= rep_index < R):
-            raise ValueError(f"REP_INDEX={rep_index} non valido per R={R} repliche.")
-        X = X_raw[:, :, rep_index].astype(np.float32)
-    else:
-        X = X_raw.astype(np.float32)
-        N, d = X.shape
+    def extract_rep(val_raw, name):
+        if val_raw.ndim == 3 and name == "X":
+            # X: (N, d, R)
+            _, _, R_val = val_raw.shape
+            if not (0 <= rep_index < R_val):
+                raise ValueError(f"REP_INDEX={rep_index} non valido per {name} con R={R_val} repliche.")
+            return val_raw[:, :, rep_index].astype(np.float32)
+        elif val_raw.ndim == 2 and val_raw.shape[1] > 1 and name != "X":
+            # T, Y, mask: (N, R)
+            _, R_val = val_raw.shape
+            if not (0 <= rep_index < R_val):
+                raise ValueError(f"REP_INDEX={rep_index} non valido per {name} con R={R_val} repliche.")
+            return val_raw[:, rep_index]
+        else:
+            # Se 2D con una colonna, o 1D, faccio squeeze
+            return val_raw.squeeze()
 
-    # T_raw può essere 1D (N,) o 2D (N,R) o 2D (N,1)
-    if T_raw.ndim == 2 and T_raw.shape[1] > 1:
-        # se shape=(N,R), seleziono replica
-        T = T_raw[:, rep_index].astype(np.float32).reshape(-1, 1)
-    else:
-        # se shape=(N,1) o (N,), ridimensiono
-        T = T_raw.astype(np.float32).reshape(-1, 1)
+    X = extract_rep(X_raw, "X").astype(np.float32)
+    T = extract_rep(T_raw, "T").astype(np.float32)
+    Y = extract_rep(Y_raw, "Y").astype(np.float32)
 
-    # Y_raw analogamente
-    if Y_raw.ndim == 2 and Y_raw.shape[1] > 1:
-        Y = Y_raw[:, rep_index].astype(np.float32).reshape(-1, 1)
-    else:
-        Y = Y_raw.astype(np.float32).reshape(-1, 1)
-
-    # mask_RCT facoltativa
     mask_RCT = None
     if "mask_RCT" in keys:
-        m = data["mask_RCT"]
-        # se anche mask_RCT è 2D con repliche
-        if m.ndim == 2:
-            mask_RCT = m[:, rep_index].astype(bool)
-        else:
-            mask_RCT = m.astype(bool)
+        mask_raw = data["mask_RCT"]
+        mask_RCT = extract_rep(mask_raw, "mask_RCT").astype(bool)
 
     return X, T, Y, mask_RCT
 
 
+def compute_true_att(T_train, Y_train, mask_train, T_test, Y_test, mask_test):
+    """
+    Calcola l’ATT “vero” unendo eventuali RCT da train e test.
+    """
+    if mask_train is None and mask_test is None:
+        return None
+
+    T_list, Y_list = [], []
+    if mask_train is not None and np.any(mask_train):
+        T_list.append(T_train[mask_train])
+        Y_list.append(Y_train[mask_train])
+    if mask_test is not None and np.any(mask_test):
+        T_list.append(T_test[mask_test])
+        Y_list.append(Y_test[mask_test])
+
+    if not T_list:
+        return None
+
+    T_rct = np.concatenate(T_list)
+    Y_rct = np.concatenate(Y_list)
+
+    if len(T_rct) == 0:
+        return None
+
+    Y_treated = Y_rct[T_rct == 1]
+    Y_control = Y_rct[T_rct == 0]
+
+    if len(Y_treated) == 0 or len(Y_control) == 0:
+        logging.warning("Non ci sono unità trattate o di controllo nel campione RCT per calcolare ATT_true.")
+        return None
+
+    return Y_treated.mean() - Y_control.mean()
+
+
 def main():
-    # Imposto seed per riproducibilità
-    np.random.seed(SEED)
-    torch.manual_seed(SEED)
-    random.seed(SEED)
-    os.environ["PYTHONHASHSEED"] = str(SEED)
+    set_seed(SEED)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.info(f"Usando device: {device}")
 
     # Preparo cartella di output
     output_root = Path(OUTPUT_DIR)
     output_root.mkdir(parents=True, exist_ok=True)
 
-    # --------------------------------------------------------------------------------
-    # 1) Caricamento dati da file .npz separati (train + test)
-    # --------------------------------------------------------------------------------
-    print(f"[INFO] Carico dati di TRAIN da '{NPZ_TRAIN_PATH}' …")
+    # --------------------------------------------------------------------------
+    # 1) Caricamento dati da file .npz per JOBS
+    # --------------------------------------------------------------------------
+    logging.info(f"Carico dati di TRAIN da '{NPZ_TRAIN_PATH}' …")
     X_train, T_train, Y_train, mask_RCT_train = load_from_npz(NPZ_TRAIN_PATH, REP_INDEX)
-    print(f"[INFO] TRAIN: X_train.shape = {X_train.shape}, T_train.shape = {T_train.shape}, Y_train.shape = {Y_train.shape}")
+    logging.info(f"TRAIN: X={X_train.shape}, T={T_train.shape}, Y={Y_train.shape}, mask_RCT={mask_RCT_train.shape if mask_RCT_train is not None else None}")
 
-    print(f"[INFO] Carico dati di TEST da '{NPZ_TEST_PATH}' …")
+    logging.info(f"Carico dati di TEST da '{NPZ_TEST_PATH}' …")
     X_test, T_test, Y_test, mask_RCT_test = load_from_npz(NPZ_TEST_PATH, REP_INDEX)
-    print(f"[INFO]  TEST: X_test.shape  = {X_test.shape},  T_test.shape  = {T_test.shape},  Y_test.shape  = {Y_test.shape}")
+    logging.info(f"TEST:  X={X_test.shape},  T={T_test.shape},  Y={Y_test.shape}, mask_RCT={mask_RCT_test.shape if mask_RCT_test is not None else None}")
 
-    # Calcolo ATT_true combinando eventuali mask_RCT in train e test
-    att_true = None
-    if mask_RCT_train is not None or mask_RCT_test is not None:
-        # Unisco train+test per calcolare ATT_true su tutto l'insieme RCT
-        X_all   = np.vstack([X_train,   X_test])
-        T_all   = np.vstack([T_train,   T_test])
-        Y_all   = np.vstack([Y_train,   Y_test])
-        if mask_RCT_train is None:
-            mask_RCT_all = mask_RCT_test
-        elif mask_RCT_test is None:
-            mask_RCT_all = mask_RCT_train
-        else:
-            mask_RCT_all = np.concatenate([mask_RCT_train, mask_RCT_test])
-
-        treated_rct_all = (T_all[mask_RCT_all].flatten() == 1)
-        control_rct_all = (T_all[mask_RCT_all].flatten() == 0)
-        Y_rct_all = Y_all[mask_RCT_all]
-        att_true = float(
-            Y_rct_all[treated_rct_all].mean() - Y_rct_all[control_rct_all].mean()
-        )
-        print(f"[INFO] ATT_true (RCT complessivo) = {att_true:.4f}")
+    # Calcolo ATT_true (se mask_RCT esiste)
+    att_true = compute_true_att(T_train, Y_train, mask_RCT_train, T_test, Y_test, mask_RCT_test)
+    if att_true is not None:
+        logging.info(f"ATT_true (RCT): {att_true:.6f}")
     else:
-        print("[WARNING] Nessuna maschera 'mask_RCT' in TRAIN o TEST: non calcolerò ATT_true.")
+        logging.info("ATT_true non disponibile (nessuna mask_RCT valida).")
 
-    # --------------------------------------------------------------------------------
-    # 2) Standardizzazione delle covariate (fit su train, poi apply a test)
-    # --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
+    # 2) Standardizzazione delle covariate
+    # --------------------------------------------------------------------------
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test  = scaler.transform(X_test)
 
-    # --------------------------------------------------------------------------------
-    # 3) Pre‐training del modello base (BCAUSS) su TRAIN
-    # --------------------------------------------------------------------------------
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[INFO] Device disponibile: {device}")
-
-    print("[INFO] Inizio warm‐up BCAUSS su TRAIN…")
-    model_base = BCAUSS(input_dim=X_train.shape[1])
-    model_base.to(device)
+    # --------------------------------------------------------------------------
+    # 3) Warm‐up: addestramento del modello base BCAUSS per stimare μ₀ e μ₁
+    # --------------------------------------------------------------------------
+    logging.info("Warm‐up: addestro BCAUSS base...")
+    base_model_params_for_warmup = {
+        'input_dim': X_train.shape[1],
+        'epochs': WARMUP_EPOCHS,
+        'learning_rate': LR_BASE,
+        'reg_l2': WEIGHT_DECAY_BASE,
+        'bs_ratio': 0.05,      # Esempio di bs_ratio; regola se necessario
+        'val_split': 0.2,
+        'verbose': True,
+        'scale_preds': True
+    }
+    base_model = BCAUSS(**base_model_params_for_warmup)
+    base_model.to(device)
 
     if WARMUP_EPOCHS > 0:
-        model_base.fit(
-            X_train, T_train, Y_train,
-            epochs=WARMUP_EPOCHS
-        )
+        base_model.fit(X_train, T_train, Y_train.reshape(-1, 1))
+        logging.info("Fine warm‐up BCAUSS.")
     else:
-        print("[INFO] Skip warmup BCAUSS (WARMUP_EPOCHS=0).")
+        logging.info("Warmup BCAUSS saltato (WARMUP_EPOCHS=0).")
+        # Se non facciamo warmup, assicuriamoci di avere lo y_scaler fittato
+        if base_model.params.get('scale_preds', False) and base_model.y_scaler is None:
+            temp_scaler = StandardScaler()
+            base_model.y_scaler = temp_scaler.fit(Y_train.reshape(-1, 1))
 
-    # Calcolo mu0_hat e mu1_hat su TRAIN
-    print("[INFO] Calcolo mu0_hat, mu1_hat su TRAIN…")
+    # --------------------------------------------------------------------------
+    # 4) Calcolo predizioni μ₀_hat e μ₁_hat su train e test
+    # --------------------------------------------------------------------------
     with torch.no_grad():
-        X_train_tensor = torch.tensor(X_train, dtype=torch.float32, device=device)
-        mu_pred_tensor, _ = model_base.mu_and_embedding(X_train_tensor)
-        mu_pred = mu_pred_tensor.cpu().numpy()   # (n_train, 2)
-        mu0_hat = mu_pred[:, 0].astype(np.float32)
-        mu1_hat = mu_pred[:, 1].astype(np.float32)
+        # Su TRAIN
+        X_tr_tensor = torch.tensor(X_train, dtype=torch.float32, device=device)
+        mu_tr_tensor, _ = base_model.mu_and_embedding(X_tr_tensor)
+        mu_pred_tr = mu_tr_tensor.cpu().numpy().astype(np.float32)  # shape (n_train, 2)
+        mu0_hat_train = mu_pred_tr[:, 0]
+        mu1_hat_train = mu_pred_tr[:, 1]
 
-    # --------------------------------------------------------------------------------
-    # 4) Addestramento SiameseBCAUSS su TRAIN
-    # --------------------------------------------------------------------------------
-    print("[INFO] Inizio training di SiameseBCAUSS…")
-    siamese_params = {
+        # Su TEST
+        X_te_tensor = torch.tensor(X_test, dtype=torch.float32, device=device)
+        mu_te_tensor, _ = base_model.mu_and_embedding(X_te_tensor)
+        mu_pred_te = mu_te_tensor.cpu().numpy().astype(np.float32)  # shape (n_test, 2)
+        mu0_hat_test = mu_pred_te[:, 0]
+        mu1_hat_test = mu_pred_te[:, 1]
+
+    # --------------------------------------------------------------------------
+    # 5) Creazione del DataSet contrastivo per SiameseBCAUSS
+    # --------------------------------------------------------------------------
+    X_all   = np.vstack([X_train, X_test])                   # (n_train + n_test, d)
+    T_all   = np.concatenate([T_train, T_test])               # (n_train + n_test,)
+    Y_all   = np.concatenate([Y_train, Y_test])               # (n_train + n_test,)
+    mu0_all = np.concatenate([mu0_hat_train, mu0_hat_test])   # (n_tot,)
+    mu1_all = np.concatenate([mu1_hat_train, mu1_hat_test])   # (n_tot,)
+
+    ds = DynamicContrastiveCausalDS(
+        X_all,
+        T_all,
+        Y_all.reshape(-1, 1),
+        mu0_all,
+        mu1_all,
+        bs=BATCH_SIZE_SIAMESE
+    )
+
+    # --------------------------------------------------------------------------
+    # 6) Addestramento di SiameseBCAUSS
+    # --------------------------------------------------------------------------
+    logging.info("Inizio training di SiameseBCAUSS…")
+    siamese_train_params = {
         "ds_class": DynamicContrastiveCausalDS,
         "margin": MARGIN,
         "lambda_ctr": LAMBDA_CTR,
         "batch_size": BATCH_SIZE_SIAMESE,
         "lr": LR_SIAMESE,
-        "weight_decay": WEIGHT_DECAY_SIAMESE,
         "epochs": EPOCHS_SIAMESE,
         "clip_norm": CLIP_NORM,
         "use_amp": USE_AMP,
-        "val_split": VAL_SPLIT,
+        "val_split": VAL_SPLIT_SIAMESE,
+        "patience": SIAMESE_PATIENCE,
         "update_ite_freq": UPDATE_ITE_FREQ,
-        "warmup_epochs_base": 0,  # già fatto sopra
+        "warmup_epochs_base": 0,
+        "verbose": True
     }
-    model_siamese = SiameseBCAUSS(base_model=model_base, **siamese_params)
-    model_siamese.to(device)
+    model_siamese = SiameseBCAUSS(base_model=base_model, **siamese_train_params)
 
-    model_siamese.fit(X_train, T_train, Y_train, mu0_hat)
+    best_siamese_model_path = output_root / "best_siamese_bcauss_jobs.pth"
+    model_siamese.fit(X_train, T_train, Y_train.reshape(-1, 1), best_model_path=best_siamese_model_path)
+    logging.info("Fine training SiameseBCAUSS.")
 
-    # --------------------------------------------------------------------------------
-    # 5) Valutazione su TEST (e calcolo ATT_pred + R_policy se mask_RCT_test esiste)
-    # --------------------------------------------------------------------------------
-    print("[INFO] Predizione ITE su TEST…")
+    # --------------------------------------------------------------------------
+    # 7) Valutazione su TEST (calcolo ITE_pred, ATT_pred e R_policy se applicabile)
+    # --------------------------------------------------------------------------
+    logging.info("Predizione ITE su TEST …")
     with torch.no_grad():
-        X_test_tensor = torch.tensor(X_test, dtype=torch.float32, device=device)
-        mu_test_tensor, _ = model_siamese.base.mu_and_embedding(X_test_tensor)
-        mu_test = mu_test_tensor.cpu().numpy()   # (n_test, 2)
+        pred_ite_test = model_siamese.predict_ite(X_test)  # forma (n_test,)
 
-    pred_ite_test = mu_test[:, 1] - mu_test[:, 0]  # ITE stimata su TEST
-    print(f"[INFO] ITE_pred (TEST): media={pred_ite_test.mean():.4f}, std={pred_ite_test.std():.4f}")
+    logging.info(f"ITE_pred (TEST): media={pred_ite_test.mean():.4f}, std={pred_ite_test.std():.4f}")
 
-    eps_att, R_policy = float("nan"), float("nan")
-    if mask_RCT_test is not None:
-        # Identifico gli indici di test corrispondenti a mask_RCT_test
-        treated_rct_test = (T_test[mask_RCT_test].flatten() == 1)
-        control_rct_test = (T_test[mask_RCT_test].flatten() == 0)
-        # ATT_pred: media su trattati RCT in TEST
-        if treated_rct_test.sum() > 0:
-            pred_ite_rct_test = pred_ite_test[mask_RCT_test]
-            att_pred = float(pred_ite_rct_test[treated_rct_test].mean())
-            eps_att = abs(att_true - att_pred) if att_true is not None else float("nan")
-            print(f"[INFO] ATT_true = {att_true:.4f}, ATT_pred = {att_pred:.4f}, ε_ATT = {eps_att:.4f}")
+    att_pred_val = float("nan")
+    r_policy_val = float("nan")
+
+    if mask_RCT_test is not None and np.any(mask_RCT_test):
+        idx_rct_test = np.where(mask_RCT_test)[0]
+        if len(idx_rct_test) > 0:
+            att_pred_val = pred_ite_test[idx_rct_test].mean()
+            n_rct = len(idx_rct_test)
+            n_treat_policy = int(n_rct / 2)
+            if n_treat_policy > 0 and n_rct > 0:
+                # Ordino le RCT per ITE discendente
+                sorted_rct_indices_by_ite = idx_rct_test[np.argsort(pred_ite_test[idx_rct_test])[::-1]]
+                idx_selected_for_treatment_policy = sorted_rct_indices_by_ite[:n_treat_policy]
+
+                # Payoff policy: outcome medio delle unità trattate tra quelle selezionate
+                selected_and_treated_mask = T_test[idx_selected_for_treatment_policy] == 1
+                if np.any(selected_and_treated_mask):
+                    pay_policy = Y_test[idx_selected_for_treatment_policy][selected_and_treated_mask].mean()
+                else:
+                    pay_policy = float('nan')
+
+                # Payoff random: outcome medio di n_treat_policy unità trattate scelte casualmente tra le RCT
+                rct_treated_indices_test = idx_rct_test[T_test[idx_rct_test] == 1]
+                if len(rct_treated_indices_test) >= n_treat_policy:
+                    random.seed(SEED)
+                    sel_random_treated = np.random.choice(rct_treated_indices_test, size=n_treat_policy, replace=False)
+                    pay_random = Y_test[sel_random_treated].mean()
+                elif len(rct_treated_indices_test) > 0:
+                    pay_random = Y_test[rct_treated_indices_test].mean()
+                else:
+                    pay_random = float('nan')
+
+                if not np.isnan(pay_policy) and not np.isnan(pay_random):
+                    r_policy_val = pay_policy - pay_random
+                else:
+                    r_policy_val = float('nan')
+
+                logging.info(f"ATT_pred (su RCT test): {att_pred_val:.6f}")
+                logging.info(f"R_policy (stimata, su RCT test): {r_policy_val:.6f}")
+            else:
+                logging.info("Non abbastanza unità RCT o per la policy per calcolare R_policy.")
         else:
-            print("[WARNING] Nessun soggetto trattato nella porzione RCT di TEST: ATT_pred non calcolabile.")
-
-        # R_policy
-        pi_f = (pred_ite_test[mask_RCT_test] > 0).astype(int)
-        mask_pi1 = (pi_f == 1)
-        mask_pi0 = (pi_f == 0)
-
-        mask_tr1 = np.logical_and(mask_pi1, treated_rct_test)
-        mask_tr0 = np.logical_and(mask_pi0, control_rct_test)
-
-        Y_rct_test = Y_test[mask_RCT_test].flatten()
-        Ey1 = float(Y_rct_test[mask_tr1].mean()) if mask_tr1.sum() > 0 else 0.0
-        Ey0 = float(Y_rct_test[mask_tr0].mean()) if mask_tr0.sum() > 0 else 0.0
-        p1  = float(mask_pi1.mean())
-        p0  = float(mask_pi0.mean())
-
-        R_policy = 1.0 - (Ey1 * p1 + Ey0 * p0)
-        print(f"[INFO] R_policy (su RCT di TEST) = {R_policy:.4f}")
+            logging.info("Nessuna unità RCT nel test set (mask_RCT_test è tutto False). Salto ATT_pred e R_policy.")
     else:
-        print("[WARNING] Nessuna maschera 'mask_RCT' in TEST: salto ATT_pred e R_policy.")
+        logging.info("mask_RCT_test non disponibile o vuota: salto calcolo ATT_pred e R_policy.")
 
-    # --------------------------------------------------------------------------------
-    # 6) Salvataggio metriche su CSV
-    # --------------------------------------------------------------------------------
-    metrics_csv = output_root / "metrics.csv"
+    # --------------------------------------------------------------------------
+    # 8) Salvataggio metriche su CSV
+    # --------------------------------------------------------------------------
+    metrics_csv = output_root / "metrics_jobs.csv"
+    header = ["seed", "ATT_true", "ATT_pred_rct", "R_policy_rct", "ITE_mean_test", "ITE_std_test"]
+    file_exists = metrics_csv.exists()
+
     with open(metrics_csv, "a", newline="") as f:
         writer = csv.writer(f)
-        # Riga: [seed, ε_ATT, R_policy, ITE_mean, ITE_std]
+        if not file_exists:
+            writer.writerow(header)
         writer.writerow([
             SEED,
-            f"{eps_att:.6f}",
-            f"{R_policy:.6f}",
-            f"{pred_ite_test.mean():.6f}",
-            f"{pred_ite_test.std():.6f}"
+            f"{att_true:.6f}" if att_true is not None and not np.isnan(att_true) else "nan",
+            f"{att_pred_val:.6f}" if not np.isnan(att_pred_val) else "nan",
+            f"{r_policy_val:.6f}" if not np.isnan(r_policy_val) else "nan",
+            f"{pred_ite_test.mean():.6f}" if pred_ite_test is not None and not np.isnan(pred_ite_test.mean()) else "nan",
+            f"{pred_ite_test.std():.6f}" if pred_ite_test is not None and not np.isnan(pred_ite_test.std()) else "nan"
         ])
 
-    print(f"[INFO] Metriche salvate in: {metrics_csv}")
-    print("[INFO] Training completato.")
+    logging.info(f"Metriche salvate in: {metrics_csv}")
+    logging.info("Training completato.")
 
 
 if __name__ == "__main__":

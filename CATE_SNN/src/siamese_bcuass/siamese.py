@@ -165,7 +165,9 @@ class SiameseBCAUSS(nn.Module):
 
             for batch_data in train_loader:
                 x1, y1_true, t1_true, x2, y2_true, t2_true, labels_ctr = batch_data
-
+                logging.info(f"SIAMESE DEBUG - Shape di t1_true: {t1_true.shape}")  # FONDAMENTALE
+                logging.info(f"SIAMESE DEBUG - Shape di t2_true: {t2_true.shape}")  # FONDAMENTALE
+                logging.info(f"SIAMESE DEBUG - Shape di x1: {x1.shape}")
                 x1, y1_true, t1_true = x1.to(self.device), y1_true.to(self.device), t1_true.to(self.device)
                 x2, y2_true, t2_true = x2.to(self.device), y2_true.to(self.device), t2_true.to(self.device)
                 labels_ctr = labels_ctr.to(self.device).float()
