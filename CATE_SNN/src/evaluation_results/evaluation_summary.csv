@@ -1,0 +1,2 @@
+trial_id,rep_index,mean_ps_treated,mean_ps_control,wasserstein_ps,mmd_linear,mmd_rbf,mmd_poly,silhouette_score,acc_pred_T_from_embedding,max_smd_unweighted,max_smd_weighted
+4,1000,0.2889061549673204,0.1672361224116779,0.12177966792999116,0.9459304809570312,0.006903588771820068,4790.5,0.013230639,0.8110119047619048,0.42637666438830174,0.26835167116427233

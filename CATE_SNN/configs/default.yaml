@@ -47,7 +47,7 @@ bcauss_params:
 # —————————————————————
 # SEARCH SPACE per Grid Search
 grid:
-  margin:      [0.75]                           # tieni solo il valore utile
+  margin:      [0, 0.50]                           # tieni solo il valore utile
   lambda_ctr:  [1.0]
   lr:          [2e-4, 3e-4, 5e-4, 7e-4, 1e-3]
   batch_size:  [32]

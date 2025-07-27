@@ -18,10 +18,16 @@ from sklearn.manifold import TSNE
 from sklearn.linear_model import LogisticRegression
 from pathlib import Path
 
+# NEW IMPORTS
+from sklearn.metrics import silhouette_score
+from sklearn.linear_model import LogisticRegressionCV
+# END NEW IMPORTS
+
 # Importa le classi del progetto (regola i percorsi se necessario)
 from src.models.bcauss import BCAUSS
 from src.siamese_bcuass.siamese import SiameseBCAUSS
 from src.data_loader import DataLoader as CFLoader
+
 
 # -----------------------------------------------------------------------------
 # 1) Funzioni ausiliarie per MMD, distanze, propensity e metriche
@@ -45,11 +51,12 @@ def compute_rbf_mmd_np(embeddings: np.ndarray, treatments: np.ndarray, sigma: fl
     """
     Calcola l’MMD^2 con kernel RBF (gaussiano) tra embedding di trattati e controlli.
     """
+
     def rbf_kernel(A: np.ndarray, B: np.ndarray, sigma: float) -> np.ndarray:
-        sq_A = np.sum(A**2, axis=1)[:, np.newaxis]
-        sq_B = np.sum(B**2, axis=1)[np.newaxis, :]
+        sq_A = np.sum(A ** 2, axis=1)[:, np.newaxis]
+        sq_B = np.sum(B ** 2, axis=1)[np.newaxis, :]
         sq_dists = sq_A + sq_B - 2 * A.dot(B.T)
-        return np.exp(-sq_dists / (2 * sigma**2))
+        return np.exp(-sq_dists / (2 * sigma ** 2))
 
     z_t = embeddings[treatments == 1]
     z_c = embeddings[treatments == 0]
@@ -93,6 +100,44 @@ def compute_poly_mmd_np(embeddings: np.ndarray, treatments: np.ndarray,
     sum_tc = np.sum(K_tc) / (m * n)
 
     return float(sum_tt + sum_cc - 2 * sum_tc)
+
+
+def compute_smd(x: np.ndarray, w: np.ndarray, t: np.ndarray) -> float:
+    """
+    Calcola lo Standardized Mean Difference (SMD) per una singola covariata.
+    """
+    # Filtra i dati per i gruppi trattati e controlli
+    x1 = x[t == 1]
+    w1 = w[t == 1]
+    x0 = x[t == 0]
+    w0 = w[t == 0]
+
+    # Calcola le medie pesate
+    m1 = np.average(x1, weights=w1)
+    m0 = np.average(x0, weights=w0)
+
+    # Calcola le varianze pesate (attenzione: np.average con weights per la varianza
+    # richiede un po' di attenzione per essere uncorrected sample variance.
+    # Qui usiamo la formula standard per SMD.)
+    # Varianza per i trattati
+    if len(x1) > 1 and np.sum(w1) > 0:
+        v1 = np.sum(w1 * (x1 - m1) ** 2) / (np.sum(w1) * (1 - np.sum(w1 ** 2) / np.sum(w1) ** 2))
+    else:
+        v1 = 0.0
+
+    # Varianza per i controlli
+    if len(x0) > 1 and np.sum(w0) > 0:
+        v0 = np.sum(w0 * (x0 - m0) ** 2) / (np.sum(w0) * (1 - np.sum(w0 ** 2) / np.sum(w0) ** 2))
+    else:
+        v0 = 0.0
+
+    # Se le varianze sono zero o molto piccole, il denominatore può essere problematico.
+    # Aggiungi un piccolo epsilon per stabilità numerica o gestisci il caso.
+    denominator = np.sqrt((v1 + v0) / 2)
+    if denominator < 1e-8:  # Evita divisione per zero
+        return 0.0  # Se le varianze sono quasi zero, i gruppi sono identici
+
+    return abs(m1 - m0) / denominator
 
 
 def compute_pairwise_distances(embeddings: np.ndarray, treatments: np.ndarray, max_pairs: int = 100_000):
@@ -146,6 +191,10 @@ def evaluate_siamese(
          - Wasserstein distance tra distribuzioni di propensity score
          - MMD (lineare, RBF, polinomiale)
       • Genera plots: PCA/t-SNE, distribuzioni distanze intra/inter, heatmap, boxplot
+      • Calcola:
+         - Silhouette score su embeddings
+         - Accuracy di un classificatore su embeddings per predire T
+         - Max SMD sui covariati originali dopo weighting (con Love Plot)
     """
 
     # A) Carica IHDP
@@ -156,7 +205,7 @@ def evaluate_siamese(
 
     # Estrai la replica di train
     Xrep = X_tr_all[:, :, rep_index].astype(np.float32)  # (n_train, dim_X)
-    Trep = T_tr_all[:, rep_index].astype(np.int64)       # (n_train,)
+    Trep = T_tr_all[:, rep_index].astype(np.int64)  # (n_train,)
     n_train, input_dim = Xrep.shape
 
     # B) Ricostruisci modello Siamese identico al training
@@ -231,9 +280,54 @@ def evaluate_siamese(
     print(f"  • MMD(RBF, σ=1) = {mmd_rbf:.6e}")
     print(f"  • MMD(Poly, deg=2, c=1) = {mmd_poly:.6e}\n")
 
+    # -------------------------------------------------------------------------
+    # E5) Metriche di separabilità e balance aggiuntive
+    # -------------------------------------------------------------------------
+    # 1) Silhouette score sullo spazio di embedding
+    sil_score = silhouette_score(embeddings, Trep)
+    print(f"  • Silhouette score (0=overlap, 1=separazione perfetta): {sil_score:.4f}")
+
+    # 2) Classificatore su embeddings per predire T
+    clf_emb = LogisticRegressionCV(cv=5, max_iter=1000, solver='liblinear').fit(embeddings, Trep)
+    acc_emb = clf_emb.score(embeddings, Trep)
+    print(f"  • Accuracy predizione T da embedding: {acc_emb:.4f}")
+
+    # 3) Standardized Mean Difference (SMD) sui covariati Xrep dopo weighting
+    #    calcola i pesi da ps_pred
+    # Troncamento dei propensity scores per stabilità dei pesi IPTW
+    epsilon = 1e-3  # Valore di trimming
+    ps_pred_trimmed = np.clip(ps_pred, epsilon, 1 - epsilon)
+    w = Trep / ps_pred_trimmed + (1 - Trep) / (1 - ps_pred_trimmed)
+
+    smds = [compute_smd(Xrep[:, j], w, Trep) for j in range(Xrep.shape[1])]
+    max_smd_weighted = np.max(smds)
+    print(f"  • Max SMD sui covariati dopo weighting: {max_smd_weighted:.4f}")
+
+    # Calcola SMD non pesato
+    smd_unw = [compute_smd(Xrep[:, j], np.ones_like(w), Trep) for j in range(Xrep.shape[1])]
+    max_smd_unweighted = np.max(smd_unw)
+    print(f"  • Max SMD sui covariati non pesati: {max_smd_unweighted:.4f}\n")
+
     # -----------------------------------------------------------------------------
     #  E4) Plot e analisi visive (come prima: PCA, t-SNE, istogramma distanze, heatmap, boxplot)
     # -----------------------------------------------------------------------------
+
+    # Love Plot (SMD prima vs dopo weighting)
+    plt.figure(figsize=(10, 7))
+    plt.scatter(smd_unw, range(Xrep.shape[1]), label='SMD Non Pesato', alpha=0.7, color='tab:red')
+    plt.scatter(smds, range(Xrep.shape[1]), label='SMD Pesato (IPTW)', alpha=0.7, color='tab:blue')
+    plt.axvline(x=0.1, color='green', linestyle='--', label='Target SMD < 0.1')
+    plt.xlabel("Standardized Mean Difference (SMD)")
+    plt.ylabel("Covariata Index")
+    plt.title(f"Love Plot: Covariate Balance (Trial {trial_id}, Replica {rep_index + 1})")
+    plt.legend()
+    plt.grid(True)
+    if save_dir:
+        plt.savefig(os.path.join(save_dir, f"LovePlot_trial{trial_id}_rep{rep_index + 1}.png"),
+                    dpi=300, bbox_inches='tight')
+    else:
+        plt.show()
+    plt.close()
 
     # PCA 2D
     pca = PCA(n_components=2)
@@ -249,7 +343,8 @@ def evaluate_siamese(
     plt.legend()
     plt.grid(True)
     if save_dir:
-        plt.savefig(os.path.join(save_dir, f"PCA2D_trial{trial_id}_rep{rep_index + 1}.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(save_dir, f"PCA2D_trial{trial_id}_rep{rep_index + 1}.png"), dpi=300,
+                    bbox_inches='tight')
     else:
         plt.show()
     plt.close()
@@ -268,7 +363,8 @@ def evaluate_siamese(
     plt.legend()
     plt.grid(True)
     if save_dir:
-        plt.savefig(os.path.join(save_dir, f"tSNE2D_trial{trial_id}_rep{rep_index + 1}.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(save_dir, f"tSNE2D_trial{trial_id}_rep{rep_index + 1}.png"), dpi=300,
+                    bbox_inches='tight')
     else:
         plt.show()
     plt.close()
@@ -308,7 +404,7 @@ def evaluate_siamese(
 
     # Box-plot prime 10 dimensioni embedding (T=1 vs T=0)
     records = []
-    for dim in range(dim_to_plot):
+    for dim in range(min(dim_to_plot, 10)):  # Plotting up to 10 dimensions for clarity
         for i in range(n_train):
             records.append({
                 'dimension': f'dim_{dim}',
@@ -316,10 +412,11 @@ def evaluate_siamese(
                 'group': 'Trattati' if Trep[i] == 1 else 'Controlli'
             })
     df_embed = pd.DataFrame.from_records(records)
-    subset = df_embed[df_embed['dimension'].isin([f'dim_{i}' for i in range(min(dim_to_plot, 10))])]
+    # No need for subset as we limit in the loop now
+    # subset = df_embed[df_embed['dimension'].isin([f'dim_{i}' for i in range(min(dim_to_plot, 10))])]
 
     plt.figure(figsize=(10, 6))
-    sns.boxplot(x='dimension', y='value', hue='group', data=subset,
+    sns.boxplot(x='dimension', y='value', hue='group', data=df_embed,  # Use df_embed directly
                 palette=['tab:blue', 'tab:orange'])
     plt.xticks(rotation=45)
     plt.title("Boxplot prime 10 dimensioni (T=1 vs T=0)")
@@ -332,6 +429,31 @@ def evaluate_siamese(
     else:
         plt.show()
     plt.close()
+
+    # Logging dei risultati in un CSV
+    results = {
+        'trial_id': trial_id,
+        'rep_index': rep_index + 1,
+        'mean_ps_treated': mean_ps_treated,
+        'mean_ps_control': mean_ps_control,
+        'wasserstein_ps': wass_ps,
+        'mmd_linear': mmd_lin,
+        'mmd_rbf': mmd_rbf,
+        'mmd_poly': mmd_poly,
+        'silhouette_score': sil_score,
+        'acc_pred_T_from_embedding': acc_emb,
+        'max_smd_unweighted': max_smd_unweighted,
+        'max_smd_weighted': max_smd_weighted
+    }
+
+    if save_dir:
+        results_df = pd.DataFrame([results])
+        csv_path = os.path.join(save_dir, "evaluation_summary.csv")
+        # Se il file non esiste, crea con header; altrimenti, aggiungi senza header
+        if not os.path.exists(csv_path):
+            results_df.to_csv(csv_path, index=False, mode='w', header=True)
+        else:
+            results_df.to_csv(csv_path, index=False, mode='a', header=False)
 
     print("Valutazione completata.\n")
 
