@@ -12,11 +12,11 @@ import torch
 import optuna
 from codecarbon import EmissionsTracker
 
-from src.data_loader import DataLoader as CFLoader
-from src.models.bcauss import BCAUSS
-from src.metrics import eps_ATE_diff, PEHE_with_ite
-from src.contrastive import DynamicContrastiveCausalDS
-from src.siamese_bcuass.siamese import SiameseBCAUSS
+from CATE_SNN.src.data_loader import DataLoader as CFLoader
+from CATE_SNN.src.models.bcauss import BCAUSS
+from CATE_SNN.src.metrics import eps_ATE_diff, PEHE_with_ite
+from CATE_SNN.src.contrastive import DynamicContrastiveCausalDS
+from CATE_SNN.src.siamese_bcuass.siamese import SiameseBCAUSS
 
 
 def save_metrics(csv_path, identifier, params, eps_ate, pehe, co2=""):

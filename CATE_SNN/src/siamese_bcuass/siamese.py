@@ -14,8 +14,8 @@ from torch.utils.data import DataLoader, Dataset  # Aggiunto Dataset per chiarez
 from sklearn.preprocessing import StandardScaler
 
 # Assumendo che convert_pd_to_np e first_item siano definiti correttamente
-from src.models.utils import convert_pd_to_np  # Se è in un file utils.py dentro models
-from src.contrastive import first_item  # Se è in contrastive.py
+from CATE_SNN.src.models.utils import convert_pd_to_np  # Se è in un file utils.py dentro models
+from CATE_SNN.src.contrastive import first_item  # Se è in contrastive.py
 
 
 class SiameseBCAUSS(nn.Module):

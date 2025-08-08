@@ -1,9 +1,9 @@
 import pandas as pd 
 import numpy as np
 
-from src.data_loader import DataLoader
-from src.metrics import eps_ATE_diff, PEHE_with_ite
-from src.model import Model, PROBLEM_TYPE
+from CATE_SNN.src.data_loader import DataLoader
+from CATE_SNN.src.metrics import eps_ATE_diff, PEHE_with_ite
+from CATE_SNN.src.model import Model, PROBLEM_TYPE
 
 
 def test_train():

@@ -2,9 +2,9 @@ import os
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-from src.models.bcauss import BCAUSS
-from src.siamese_bcuass.siamese import SiameseBCAUSS
-from src.contrastive import DynamicContrastiveCausalDS
+from CATE_SNN.src.models.bcauss import BCAUSS
+from CATE_SNN.src.siamese_bcuass.siamese import SiameseBCAUSS
+from CATE_SNN.src.contrastive import DynamicContrastiveCausalDS
 
 # -------------------
 # CONFIGURAZIONE

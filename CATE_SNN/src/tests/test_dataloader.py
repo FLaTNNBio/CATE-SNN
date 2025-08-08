@@ -1,4 +1,4 @@
-from src.data_loader import DataLoader
+from CATE_SNN.src.data_loader import DataLoader
 
 
 def test_IHDP_load():

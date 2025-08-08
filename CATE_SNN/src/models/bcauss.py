@@ -9,8 +9,8 @@ from torch.utils.data import TensorDataset, DataLoader
 from torch.optim import SGD, Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-from src.model import Model  # tua classe base
-from src.models.utils import convert_pd_to_np  # helper CausalForge
+from CATE_SNN.src.model import Model  # tua classe base
+from CATE_SNN.src.models.utils import convert_pd_to_np  # helper CausalForge
 
 
 class EpsilonLayer(nn.Module):
