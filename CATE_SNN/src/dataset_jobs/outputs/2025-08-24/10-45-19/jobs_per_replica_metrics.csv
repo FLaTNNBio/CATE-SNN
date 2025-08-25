@@ -1,0 +1,2 @@
+trial_id,replica,eps_att,rpol,true_att,pred_att,relative_error,cohen_d_error
+trial_0,1,0.204901,0.263519,0.092857,-0.112044,2.206624,0.460660

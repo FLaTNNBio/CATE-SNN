@@ -1,23 +1,34 @@
-# CATE-SNN
+# Contrastive Learning via Siamese Neural Networks for conditional average treatment effects (CATE) estimation
+
+> Codice a supporto della tesi di laurea magistrale: **“Contrastive Learning via Siamese Neural Networks for Conditional Average Treatment Effect (CATE) Estimation”**.  
+> Estende un modello in stile **BCAUSS** con una regolarizzazione **siamese/contrastive** che struttura lo spazio latente: avvicina unità con **ITE simile** e allontana unità con **ITE diverso**.
+
+## Struttura del repository
+
+<code>
+├── outputs_jobs/ # Output degli esperimenti su JOBS
+├── results/ # Risultati aggregati (CSV, tabelle)
+├── saved_weights_reps/ # Pesi pre-addestrati per trial/replica
+├── src/
+│ ├── bcauss/ # Componenti del modello base
+│ ├── data/ # (Metti qui i dataset se non gestiti dal loader)
+│ ├── dataset_jobs/ # Utility per il benchmark JOBS
+│ ├── evaluation_results/ # Metriche & plot dalle run di valutazione
+│ ├── evaluation_results_refactored/# Esportazioni “pulite” più recenti
+│ ├── extraction_results/ # Embedding & trattamenti salvati
+│ ├── models/ # Wrapper del modello e teste (h0, h1, ...)
+│ ├── outputs/ # Artefatti vari delle run
+│ ├── siamese_bcuass/ # Training siamese/contrastive (BCAUSS)
+│ ├── tests/
+│ │ ├── init.py
+│ │ ├── advantages.py
+│ │ ├── contrastive.py
+│ │ ├── data_loader.py
+│ │ └── metrics.py
+│ └── evaluation.py # Valutazione completa su IHDP (per replica)
+└── README.md
+</code>
 
 
-Il codice è attualmente in fase di validazione; potrebbero essere necessari aggiustamenti per ottenere una convergenza più rapida e stabile. Di seguito alcune indicazioni preliminari:
 
-1. **Rimozione di BatchNorm nella representation network**  
-   Nel costruttore della rete di rappresentazione è presente una linea simile a:  
-   ```python
-   layers.append(nn.BatchNorm1d(hidden_dim))
-   ```  
-   Commentare o rimuovere tale riga può agevolare la discesa della *factual loss* e della *contrastive loss*, evitando possibili effetti indesiderati del rumore di batch sulle repliche.
-
-2. **Normalizzazione a monte dei dati**  
-   Si raccomanda di applicare una standardizzazione (ad esempio `StandardScaler`) o altra forma di normalizzazione sui features **prima** dell’input in rete, piuttosto che utilizzare BatchNorm interno. In questo modo i dati in ingresso risultano più “stabili” e favoriscono una migliore ottimizzazione.
-
-3. **Aggregazione delle loss e aggiornamento dei pesi**  
-   Le loss (factual e contrastive) devono essere accumulate su tutte le repliche all’interno di un’epoca, chiamando poi:
-   ```python
-   total_loss.backward()
-   optimizer.step()
-   ```
-   **una sola volta per epoca**, anziché eseguire un `backward()` e uno `step()` dopo ogni realizzazione. Ciò garantisce aggiornamenti più robusti e coerenti con l’obiettivo di minimizzare la loss aggregata.
-
+> Nota: gli import usano il pacchetto `src/`. Se serve, aggiungi la root del repo al `PYTHONPATH`.

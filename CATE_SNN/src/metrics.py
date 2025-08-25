@@ -3,7 +3,7 @@ Code Skeleton from:  https://github.com/vanderschaarlab/mlforhealthlabpub/blob/m
 """
 
 import numpy as np
-from scipy import stats
+
 
 
 def sqrt_PEHE(y: np.ndarray, hat_y: np.ndarray) -> float:

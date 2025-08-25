@@ -1,0 +1,46 @@
+# File di configurazione principale: jobs_config.yaml
+
+# --- Impostazioni Generali ---
+seed: 42
+device: "cuda"  # o "cpu" se non hai una GPU
+n_reps: 10      # Numero di repliche del dataset da usare (il file ne contiene 10)
+epochs: 50      # Numero di epoche per il training del modello Siamese
+
+# --- Percorsi dei Dati ---
+data:
+  # Assicurati che questi percorsi siano corretti rispetto alla posizione da cui esegui lo script
+  train_path: "../../src/data/jobs_DW_bin.new.10.train.npz"
+  test_path: "../../src/data/jobs_DW_bin.new.10.test.npz"
+  name: "jobs"
+# --- Impostazioni del Modello Base ---
+bcauss:
+  reg_l2: 1e-5
+
+# --- Impostazioni del Modello Siamese ---
+siamese:
+  # warmup sul solo RCT prima di contrastive
+  warmup_epochs_base: 5
+  # ogni quante epoche ricalcolare ITE e soglia dinamica
+  update_ite_freq: 10
+  # split per validazione (il tuo val_split attuale?)
+  val_split: 0.2
+  clip_norm: 1.0
+  use_amp: True
+  lambda_reg: 0.001
+    # --- AGGIUNGI QUESTI PARAMETRI ---
+  n_pairs: 10000  # Numero di coppie da generare
+  min_thr: 0.1    # Soglia minima per la similarità
+  max_thr: 0.5    # Soglia massima
+  smooth: 0.7     # Fattore di smoothing per l'aggiornamento della sogl
+# --- Impostazioni di Optuna ---
+optuna:
+  n_trials: 1000 # Numero di tentativi per la ricerca degli iperparametri
+
+# --- Griglia di Ricerca per gli Iperparametri ---
+# Optuna cercherà i valori migliori all'interno di questi intervalli
+grid:
+  lr: [2e-4, 3e-4, 5e-4, 7e-4, 1e-3]
+  lambda_ctr: [1]
+  margin: [0.5, 1.0, 2.0]
+  perc: [60, 70, 80]
+  batch_size: [32,64, 128, 256]

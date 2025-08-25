@@ -42,6 +42,7 @@ class SiameseBCAUSS(nn.Module):
             'verbose': True,
             'update_ite_freq': 1,  # Frequenza di aggiornamento delle stime ITE
             'warmup_epochs_base': 0,  # Epoche per il warmup del modello base BCAUSS
+            'perc': 50,
         }
         p.update(user_params)
         self.params = p
@@ -104,7 +105,7 @@ class SiameseBCAUSS(nn.Module):
 
         # Initial ITE (Individual Treatment Effect) estimates from the base model
         with torch.no_grad():
-            mu_tr_tensor, _ = self.base.mu_and_embedding(
+            mu_tr_tensor,mu1_tr_tensor, _ = self.base.mu_and_embedding(
                 torch.tensor(X_np[tr_idx], dtype=torch.float32, device=self.device)
             )
         mu_tr = mu_tr_tensor.detach()
@@ -114,14 +115,16 @@ class SiameseBCAUSS(nn.Module):
         mu0_va, mu1_va = None, None
         if len(va_idx) > 0:
             with torch.no_grad():
-                mu_va_tensor, _ = self.base.mu_and_embedding(
+                mu0_va_tensor, mu1_va_tensor, _ = self.base.mu_and_embedding(
                     torch.tensor(X_np[va_idx], dtype=torch.float32, device=self.device)
                 )
-            mu_va = mu_va_tensor.detach()
+            mu_va = mu0_va_tensor.detach()
             mu0_va = mu_va[:, 0].cpu().numpy()
             mu1_va = mu_va[:, 1].cpu().numpy()
 
-        train_ds = self.ds_class(X_np[tr_idx], T_np[tr_idx], Y_np[tr_idx], mu0_tr, mu1_tr, bs=p['batch_size'])
+        train_ds = self.ds_class(X_np[tr_idx], T_np[tr_idx], Y_np[tr_idx], mu0_tr, mu1_tr, bs=p['batch_size'],
+                                 perc=p['perc'],
+                                 )
 
         val_loader = None
         if len(va_idx) > 0 and mu0_va is not None and mu1_va is not None:
