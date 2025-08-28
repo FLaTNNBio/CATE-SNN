@@ -61,7 +61,14 @@ class BCAUSS(Model, nn.Module):
 
         # ---------- rete ----------
         D, N = p['input_dim'], p['neurons_per_layer']
-        act = nn.ReLU if p['act_fn'] == 'relu' else nn.Identity
+        if p['act_fn'] == 'relu':
+            act = nn.ReLU
+        elif p['act_fn'] == 'elu':
+            act = nn.ELU
+        elif p['act_fn'] == 'tanh':
+            act = nn.Tanh
+        else:
+            raise ValueError(f"Unsupported activation function: {p['act_fn']}")
 
         # Representation tower
         self.repr_net = nn.Sequential(

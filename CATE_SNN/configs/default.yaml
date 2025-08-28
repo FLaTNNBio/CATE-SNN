@@ -45,14 +45,6 @@ bcauss_params:
   bs_ratio: 0.1
 
 # —————————————————————
-# SEARCH SPACE per Grid Search
-grid:
-  margin:      [0, 0.50]                           # tieni solo il valore utile
-  lambda_ctr:  [1.0]
-  lr:          [2e-4, 3e-4, 5e-4, 7e-4, 1e-3]
-  batch_size:  [32]
-
-# —————————————————————
 # PARAMETRI per Optuna (se usi lo script con Optuna)
 optuna:
   n_trials: 30           # numero di trial totali
@@ -63,3 +55,20 @@ optuna:
     name: MedianPruner
     n_startup_trials: 5
     n_warmup_steps: 1
+
+  # Parametri da ottimizzare
+  search_space:
+    margin:
+      type: float
+      low: 0.1
+      high: 1.0
+    optim:
+      type: categorical
+      choices: ["adam", "sgd"]
+    activation:
+      type: categorical
+      choices: ["relu", "elu", "tanh"]
+    pair_pct:
+      type: float
+      low: 0.1
+      high: 1.0
