@@ -17,6 +17,9 @@ from sklearn.preprocessing import StandardScaler
 from CATE_SNN.src.models.utils import convert_pd_to_np  # Se è in un file utils.py dentro models
 from CATE_SNN.src.contrastive import first_item  # Se è in contrastive.py
 
+# === ADDED for learning curves logging ===
+import csv, os, math  # (solo per scrivere il CSV con le curve)
+
 
 class SiameseBCAUSS(nn.Module):
     """
@@ -157,11 +160,17 @@ class SiameseBCAUSS(nn.Module):
         logging.info(
             f"Starting Siamese training for {p['epochs']} epochs on device {self.device}. AMP enabled: {use_cuda_for_amp}")
 
+        # === ADDED for learning curves logging ===
+        log_rows = []  # accumulator per righe CSV (una per epoca)
+
         # Training loop
         for epoch in range(1, p['epochs'] + 1):
             self.train()
             total_train_loss = 0.0
             num_train_batches = 0
+
+            # === ADDED for learning curves logging ===
+            total_base_loss, total_ctr_loss = 0.0, 0.0  # componenti per epoca
 
             for batch_data in train_loader:
                 x1, y1_true, t1_true, x2, y2_true, t2_true, labels_ctr = batch_data
@@ -224,6 +233,10 @@ class SiameseBCAUSS(nn.Module):
 
                 total_train_loss += loss.item()
                 num_train_batches += 1
+
+                # === ADDED for learning curves logging ===
+                total_base_loss += base_loss.item()
+                total_ctr_loss  += ctr_loss.item()
 
             avg_train_loss = total_train_loss / num_train_batches if num_train_batches > 0 else 0.0
 
@@ -316,6 +329,21 @@ class SiameseBCAUSS(nn.Module):
                 logging.info(
                     f"Epoch {epoch}/{p['epochs']} | Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss_str} | LR: {optimizer.param_groups[0]['lr']:.2e}")
 
+            # === ADDED for learning curves logging ===
+            # medie per epoca delle componenti
+            avg_train_base = total_base_loss / max(1, num_train_batches)
+            avg_train_ctr  = total_ctr_loss  / max(1, num_train_batches)
+            row = {
+                "epoch": epoch,
+                "lr": optimizer.param_groups[0]['lr'],
+                "train_base":  avg_train_base,
+                "train_ctr":   avg_train_ctr,
+                "train_total": avg_train_loss
+            }
+            if val_loader is not None and math.isfinite(avg_val_loss):
+                row["val_total"] = float(avg_val_loss)
+            log_rows.append(row)
+
             # Early stopping logic
             # Se non c'è validation_loader, best_val_loss rimane inf, quindi l'early stopping non si attiva
             # a meno che non si modifichi per usare avg_train_loss.
@@ -339,6 +367,27 @@ class SiameseBCAUSS(nn.Module):
                     logging.info(
                         f"Early stopping triggered at epoch {epoch} due to no improvement for {p['patience']} epochs.")
                     break
+
+        # === ADDED for learning curves logging ===
+        # Scrive il CSV delle curve (nella cartella Hydra se inizializzata)
+        out_dir = "."
+        try:
+            from hydra.core.hydra_config import HydraConfig
+            if HydraConfig.initialized():
+                out_dir = HydraConfig.get().runtime.output_dir
+        except Exception:
+            pass
+        log_csv = os.path.join(out_dir, "training_log.csv")
+        try:
+            with open(log_csv, "w", newline="") as f:
+                fieldnames = sorted({k for r in log_rows for k in r.keys()})
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for r in log_rows:
+                    writer.writerow(r)
+            logging.info(f"Saved learning curves log to: {log_csv}")
+        except Exception as e:
+            logging.warning(f"Could not write training_log.csv: {e}")
 
         if best_state_dict:
             logging.info(f"Loading best model state with loss: {best_val_loss:.4f}")
