@@ -26,7 +26,6 @@ def save_metrics(csv_path, identifier, params, eps_ate, pehe, co2=""):
             params['margin'],
             params['optim'],
             params['activation'],
-            params['pair_pct'],
             params['lr'],
             params['batch_size'],
             f"{eps_ate:.6f}",
@@ -39,17 +38,16 @@ def objective(trial, cfg, base, X_tr_all, T_tr_all, YF_tr_all, X_te_all, m0_te_a
     margin = trial.suggest_float('margin', 0.1, 1.0)
     optim = trial.suggest_categorical('optim', ['adam', 'sgd'])
     activation = trial.suggest_categorical('activation', ['relu', 'elu', 'tanh'])
-    pair_pct = trial.suggest_float('pair_pct', 0.1, 1.0)
+    bs= trial.suggest_categorical('batch', [16, 32, 64, 128])
 
     # ✅ Tolto riferimento a cfg.grid.lr e batch_size
     lr = cfg.bcauss_params.learning_rate
-    bs = cfg.batch  # uso quello globale, se preferisci puoi anche scegliere un valore fisso
+    #bs = cfg.batch  # uso quello globale, se preferisci puoi anche scegliere un valore fisso
 
     params = {
         'margin': margin,
         'optim': optim,
         'activation': activation,
-        'pair_pct': pair_pct,
         'lr': lr,
         'batch_size': bs
     }
@@ -67,7 +65,6 @@ def objective(trial, cfg, base, X_tr_all, T_tr_all, YF_tr_all, X_te_all, m0_te_a
         'update_ite_freq': cfg.siamese.update_ite_freq,
         'warmup_epochs_base': 0,
         'lambda_reg': cfg.siamese.lambda_reg,
-        'pair_sampling_fraction': pair_pct,
         'bcauss_params': {
             'act_fn': activation,
             'optim': optim
@@ -146,7 +143,7 @@ def run(cfg: DictConfig):
     with open(metrics_avg_csv, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow([
-            'trial_id', 'margin', 'optim', 'activation', 'pair_pct', 'lr', 'batch_size', 'eps_ate', 'pehe', 'co2_kg'
+            'trial_id', 'margin', 'optim', 'activation', 'lr', 'batch_size', 'eps_ate', 'pehe', 'co2_kg'
         ])
     with open(metrics_all_csv, 'w', newline='') as f:
         writer = csv.writer(f)

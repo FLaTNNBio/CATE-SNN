@@ -1,0 +1,4 @@
+trial_id,margin,optim,activation,lr,batch_size,eps_ate,pehe,co2_kg
+trial_3,0.6467903667112945,adam,elu,1e-05,64,0.29408,2.073373,
+trial_0,0.4370861069626263,adam,relu,1e-05,32,0.281193,1.681004,
+trial_2,0.6506676052501416,sgd,tanh,1e-05,64,0.212265,1.401821,

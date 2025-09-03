@@ -26,7 +26,7 @@ def compute_tau_threshold(mu0_hat, mu1_hat, perc=20, sample=100_000):
     return float(np.percentile(diffs, perc))
 
 
-def make_pairs_from_hat(X, T, Y, mu0_hat, mu1_hat, thr, n_pairs, seed=None, pair_fraction=1.0):
+def make_pairs_from_hat(X, T, Y, mu0_hat, mu1_hat, thr, n_pairs, seed=None):
     """
     Generate a balanced set of similar and dissimilar pairs based on ITE estimates.
     Returns:
@@ -48,11 +48,9 @@ def make_pairs_from_hat(X, T, Y, mu0_hat, mu1_hat, thr, n_pairs, seed=None, pair
                 np.zeros((0,) + T.shape[1:], dtype=T.dtype),
                 np.array([], dtype=np.int64))
 
-    # ✅ Applichiamo la frazione al numero di coppie richieste
-    total_pairs = int(n_pairs * pair_fraction)
-    total_pairs = max(1, min(total_pairs, N))  # evitare 0 o troppo
 
-    half = total_pairs // 2
+    n_pairs = min(n_pairs, N)
+    half = n_pairs // 2
     sim_pairs, diss_pairs = [], []
     used = set()
 
@@ -67,7 +65,7 @@ def make_pairs_from_hat(X, T, Y, mu0_hat, mu1_hat, thr, n_pairs, seed=None, pair
 
     # similar pairs
     attempts = 0
-    while len(sim_pairs) < half and attempts < total_pairs * 5:
+    while len(sim_pairs) < half and attempts < n_pairs * 5:
         i = np.random.randint(N)
         diffs = np.abs(ite_hat - ite_hat[i])
         cand = np.where(diffs < thr)[0]
@@ -79,7 +77,7 @@ def make_pairs_from_hat(X, T, Y, mu0_hat, mu1_hat, thr, n_pairs, seed=None, pair
 
     # dissimilar pairs (hard negatives)
     attempts = 0
-    while len(diss_pairs) < total_pairs - half and attempts < total_pairs * 5:
+    while len(diss_pairs) < n_pairs - half and attempts < n_pairs * 5:
         i = np.random.randint(N)
         diffs = np.abs(ite_hat - ite_hat[i])
         cand = np.where(diffs >= thr)[0]
@@ -130,7 +128,6 @@ class DynamicContrastiveCausalDS(Dataset):
         bs=256,
         perc=20,
         sample_for_thr_calc=100_000,
-        pair_sampling_fraction=1.0  # ✅ nuovo parametro
     ):
         self.X_all = X_all
         self.T_all = T_all
@@ -138,7 +135,6 @@ class DynamicContrastiveCausalDS(Dataset):
         self.bs = bs
         self.perc = perc
         self.sample_for_thr_calc = sample_for_thr_calc
-        self.pair_sampling_fraction = pair_sampling_fraction  # ✅ salva parametro
 
         assert X_all.shape[0] == mu0_hat.shape[0] == mu1_hat.shape[0], \
             "mu0_hat and mu1_hat must match X_all in length. Ensure no test data is included."
@@ -162,8 +158,7 @@ class DynamicContrastiveCausalDS(Dataset):
             self.current_mu1_hat,
             self.thr,
             self.bs,
-            seed=idx,
-            pair_fraction=self.pair_sampling_fraction  # ✅ qui si usa
+            seed=idx
         )
         return (
             torch.tensor(x1, dtype=torch.float32),
@@ -179,9 +174,10 @@ class DynamicContrastiveCausalDS(Dataset):
         return int(np.ceil(self.X_all.shape[0] / self.bs))
 
     def update_threshold(self):
-        with torch.no_grad():
-            X_tensor = torch.tensor(self.X_all, dtype=torch.float32)
-            distances = torch.cdist(X_tensor, X_tensor, p=2)
-            mean_distance = distances.mean().item()
-            self.thr = mean_distance
-
+        self.thr = compute_tau_threshold(
+            self.current_mu0_hat,
+            self.current_mu1_hat,
+            self.perc,
+            self.sample_for_thr_calc
+        )
+        logging.info(f"Updated dynamic threshold: {self.thr: 4f}")
