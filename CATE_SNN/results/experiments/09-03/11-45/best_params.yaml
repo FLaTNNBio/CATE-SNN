@@ -1,0 +1,5 @@
+best-params:
+    activation: relu
+    batch: 32
+    margin: 0.1185260448662222
+    optim: adam

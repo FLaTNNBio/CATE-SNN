@@ -1,0 +1,5 @@
+best_params:
+  activation: tanh
+  batch: 64
+  margin: 0.6506676052501416
+  optim: sgd
