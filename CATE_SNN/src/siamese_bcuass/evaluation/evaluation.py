@@ -391,10 +391,10 @@ class SiameseEvaluator:
         Z_pca = pca.fit_transform(self.embeddings)
         plt.figure(figsize=(8, 7))
         sns.scatterplot(x=Z_pca[:, 0], y=Z_pca[:, 1], hue=self.T_rep, palette=['tab:orange', 'tab:blue'], alpha=0.7)
-        plt.title(f"PCA degli Embedding {common_title_suffix}")
-        plt.xlabel("Componente Principale 1")
-        plt.ylabel("Componente Principale 2")
-        plt.legend(title='Gruppo', labels=['Controllo', 'Trattato'])
+        plt.title(f"PCA of Embeddings {common_title_suffix}")
+        plt.xlabel("Main Component 1")
+        plt.ylabel("Main Component 1")
+        plt.legend(title='Group', labels=['Controls', 'Treatment'])
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.savefig(self.save_dir / f"PCA_plot{save_suffix}", dpi=300, bbox_inches='tight')
         plt.close()
@@ -405,9 +405,9 @@ class SiameseEvaluator:
         plt.figure(figsize=(8, 7))
         sns.scatterplot(x=Z_tsne[:, 0], y=Z_tsne[:, 1], hue=self.T_rep, palette=['tab:orange', 'tab:blue'], alpha=0.7)
         plt.title(f"t-SNE degli Embedding {common_title_suffix}")
-        plt.xlabel("Dimensione t-SNE 1")
-        plt.ylabel("Dimensione t-SNE 2")
-        plt.legend(title='Gruppo', labels=['Controllo', 'Trattato'])
+        plt.xlabel("Dimension t-SNE 1")
+        plt.ylabel("Dimension t-SNE 2")
+        plt.legend(title='Group', labels=['Controls', 'Treatment'])
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.savefig(self.save_dir / f"tSNE_plot{save_suffix}", dpi=300, bbox_inches='tight')
         plt.close()
@@ -415,14 +415,14 @@ class SiameseEvaluator:
         # c) Istogramma delle distanze
         dists_tt, dists_cc, dists_tc = compute_pairwise_distances(self.embeddings, self.T_rep)
         plt.figure(figsize=(10, 6))
-        sns.histplot(dists_tc, bins=50, color='tab:green', label='Trattato-Controllo (Inter)', stat='density',
+        sns.histplot(dists_tc, bins=50, color='tab:green', label='Treatment-Control (Inter)', stat='density',
                      alpha=0.6)
-        sns.histplot(dists_tt, bins=50, color='tab:blue', label='Trattato-Trattato (Intra)', stat='density', alpha=0.6)
-        sns.histplot(dists_cc, bins=50, color='tab:orange', label='Controllo-Controllo (Intra)', stat='density',
+        sns.histplot(dists_tt, bins=50, color='tab:blue', label='Treatment-Treatment (Intra)', stat='density', alpha=0.6)
+        sns.histplot(dists_cc, bins=50, color='tab:orange', label='Control-Control (Inter) (Intra)', stat='density',
                      alpha=0.6)
-        plt.title(f"Distribuzione delle Distanze Euclidee {common_title_suffix}")
-        plt.xlabel("Distanza Euclidea")
-        plt.ylabel("Densità")
+        plt.title(f"Distribution of Euclidean Distances {common_title_suffix}")
+        plt.xlabel("Euclidean Distance")
+        plt.ylabel("Density")
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.savefig(self.save_dir / f"Distances_hist{save_suffix}", dpi=300, bbox_inches='tight')
@@ -431,12 +431,12 @@ class SiameseEvaluator:
         # d) Love Plot
         plt.figure(figsize=(10, 8))
         y_ticks = range(self.X_rep.shape[1])
-        plt.scatter(self.smd_data['unweighted'], y_ticks, color='tab:red', alpha=0.7, label='SMD Non Pesato')
-        plt.scatter(self.smd_data['weighted'], y_ticks, color='tab:blue', alpha=0.7, label='SMD Pesato (IPTW)')
+        plt.scatter(self.smd_data['unweighted'], y_ticks, color='tab:red', alpha=0.7, label='SMD Non-Weighted')
+        plt.scatter(self.smd_data['weighted'], y_ticks, color='tab:blue', alpha=0.7, label='SMD Weighted (IPTW)')
         plt.axvline(x=0.1, color='green', linestyle='--', label='Soglia di bilanciamento (0.1)')
-        plt.title(f"Love Plot: Bilanciamento Covariate {common_title_suffix}")
+        plt.title(f"Love Plot: Covariate Balancing {common_title_suffix}")
         plt.xlabel("Standardized Mean Difference (SMD)")
-        plt.ylabel("Indice Covariata")
+        plt.ylabel("Covariate Index")
         plt.yticks(y_ticks, [f'Cov_{i}' for i in y_ticks])
         plt.legend()
         plt.grid(True, axis='x', linestyle='--', alpha=0.6)
@@ -490,9 +490,9 @@ if __name__ == "__main__":
     # --- CONFIGURAZIONE DELL'ESECUZIONE ---
     # Modifica questi parametri per eseguire la valutazione desiderata
     CONFIG = {
-        "TRIAL_ID": 4,
+        "TRIAL_ID": 9,
         "REP_INDEX": 999,  # Indice 0-based, quindi 999 -> replica 1000
-        "WEIGHTS_DIR": "siamese_bcuass/saved_weights",
+        "WEIGHTS_DIR": "../saved_weights/",
         "SAVE_DIR": "evaluation_results_refactored"
     }
     # -----------------------------------------

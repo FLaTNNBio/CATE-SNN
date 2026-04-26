@@ -40,9 +40,9 @@ class SiameseBCAUSS(nn.Module):
             'clip_norm': 1.0,
             'use_amp': False,  # Automatic Mixed Precision
             'verbose': True,
-            'update_ite_freq': 1,  # Frequenza di aggiornamento delle stime ITE
+            'update_ite_freq': 5,  # Frequenza di aggiornamento delle stime ITE
             'warmup_epochs_base': 0,  # Epoche per il warmup del modello base BCAUSS
-            'perc': 50,
+            'perc': 20,
         }
         p.update(user_params)
         self.params = p

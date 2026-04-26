@@ -5,7 +5,6 @@ Code Skeleton from:  https://github.com/vanderschaarlab/mlforhealthlabpub/blob/m
 import numpy as np
 
 
-
 def sqrt_PEHE(y: np.ndarray, hat_y: np.ndarray) -> float:
     """
     Precision in Estimation of Heterogeneous Effect(Numpy version).
@@ -98,9 +97,8 @@ def ATT(t: np.ndarray, y: np.ndarray, hat_y: np.ndarray) -> np.ndarray:
     """
     # Original ATT
     ATT_value = np.sum(t * y) / (np.sum(t) + 1e-8) - np.sum((1 - t) * y) / (
-        np.sum(1 - t) + 1e-8
+            np.sum(1 - t) + 1e-8
     )
     # Estimated ATT
     ATT_estimate = np.sum(t * (hat_y[:, 1] - hat_y[:, 0])) / (np.sum(t) + 1e-8)
     return np.abs(ATT_value - ATT_estimate)
-

@@ -272,9 +272,7 @@ class BCAUSS(Model, nn.Module):
                 scheduler.step(tl)  # Esempio: usa training loss se non c'è validation
                 vl = tl  # Imposta vl=tl per la stampa e l'early stopping se non c'è validazione
 
-            if p['verbose']:
-                print(
-                    f"BCAUSS Warmup Epoch {epoch}/{num_epochs_to_run}  train={tl:.4f}  val={vl:.4f}  lr={optimizer.param_groups[0]['lr']:.2e}")
+
 
             if vl < best_val - 1e-6:  # Early stopping basato su vl
                 best_val = vl
@@ -308,13 +306,20 @@ class BCAUSS(Model, nn.Module):
     def predict_ite(self, X):
         X = convert_pd_to_np(X)
         self.eval()
+
         xt = torch.tensor(X, dtype=torch.float32, device=self.device)
+
         with torch.no_grad():
             _, y0, y1, _ = self.forward(xt)
-        y0_np, y1_np = y0.cpu().numpy(), y1.cpu().numpy()
-        if self.params['scale_preds']:
+
+        y0_np = y0.cpu().numpy()
+        y1_np = y1.cpu().numpy()
+
+        # inverse transform solo se lo scaler esiste davvero
+        if self.params.get('scale_preds', False) and self.y_scaler is not None:
             y0_np = self.y_scaler.inverse_transform(y0_np)
             y1_np = self.y_scaler.inverse_transform(y1_np)
+
         return (y1_np - y0_np).squeeze()
 
     def predict_ate(self, X, *args):
